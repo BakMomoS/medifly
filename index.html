@@ -251,6 +251,59 @@ class Component extends DCLogic {
     {id:'MF-0476', struct:'CHU Ibn Rochd', city:'Casablanca', item:'Adrénaline ×4', prio:'Urgence vitale', status:'Livrée', c:'#1FA97A'},
   ]; }
 
+  // ===== ALGORITHME DE PRIORISATION (port JS de main.py PLBD 19) =====
+  // Coefficients identiques au backend FastAPI MediFly (fichier algorithmes/main.py)
+  priorityCoeffs(){ return { W_URGENCE: 15.0, W_TEMPS: -0.5, W_AGING: 0.05, VITESSE_CROISIERE_KMH: 60.0, POIDS_BOITE_KG: 2.0 }; }
+
+  // Estime le temps de vol en minutes (port de estimer_temps_vol_reel)
+  estimerTempsVol(distance_km, facteur_meteo){
+    const v = (facteur_meteo||1.0) * this.priorityCoeffs().VITESSE_CROISIERE_KMH;
+    if(v<=0) return Infinity;
+    return (distance_km/v)*60;
+  }
+
+  // Score d'urgence médicale par nom de médicament (port de medicaments_dataset.csv,
+  // étendu avec les produits du catalogue MediFly). Score de 1 (routine) à 10 (vital).
+  medUrgence(name){
+    const m={
+      // Dataset original PLBD 19
+      'insuline':9,'adrénaline':10,'adrenaline':10,'antivenin':10,'paracétamol':2,'paracetamol':2,
+      'amoxicilline':6,'salbutamol':8,'morphine':9,'rage':7,'dextrose':7,'atropine':10,
+      'diazépam':8,'diazepam':8,'furosémide':5,'furosemide':5,'spasfon':3,'hydrocortisone':7,
+      'physiologique':4,'naloxone':10,'vitamine':1,'augmentin':6,'héparine':8,'heparine':8,
+      // Extensions catalogue MediFly
+      'sang':9,'plasma':7,'tétanique':6,'tetanique':6,'kit':4,'suture':4,
+      'oxygène':9,'oxygene':9,'trousse':3,'secours':3
+    };
+    const k=(name||'').toLowerCase();
+    let max=1;
+    Object.keys(m).forEach(function(w){ if(k.indexOf(w)>=0 && m[w]>max) max=m[w]; });
+    return max;
+  }
+
+  // Score de priorité IA d'une commande : urgence × W_URGENCE + temps_vol × W_TEMPS + attente × W_AGING
+  priorityScore(urgence, distance_km, age_seconds){
+    const W=this.priorityCoeffs();
+    const t=this.estimerTempsVol(distance_km||5, 1.0);
+    return urgence*W.W_URGENCE + t*W.W_TEMPS + (age_seconds||0)*W.W_AGING;
+  }
+
+  // Retourne supOrders enrichi des scores, trié par priorité décroissante
+  scoredOrders(){
+    const c=this;
+    return c.supOrders().map(function(o){
+      const u=c.medUrgence(o.item);
+      const d=o.distance_km||(5+Math.random()*8);
+      const age=o.age_seconds||(o.status==='À confirmer'?300:o.status==='En vol'?600:1800);
+      const s=c.priorityScore(u,d,age);
+      let cat='Standard', col='#1FA97A';
+      if(s>=130){ cat='Critique'; col='#E5484D'; }
+      else if(s>=90){ cat='Élevée'; col='#E08600'; }
+      else if(s>=60){ cat='Modérée'; col='#1565D8'; }
+      return Object.assign({},o,{urgence:u,score:Math.round(s*10)/10,scoreCat:cat,scoreColor:col,distance_km:Math.round(d*10)/10});
+    }).sort(function(a,b){ return b.score - a.score; });
+  }
+
   // Télémétrie de vol — deux modes ÉTANCHES :
   //  • Drone connecté (serialOn)  → uniquement les données envoyées par le firmware
   //  • Mode démo (non connecté)  → simulation pédagogique (vol fictif Casa)
@@ -1091,24 +1144,34 @@ function statusChip(o){return React.createElement('span',{style:{display:'inline
 
 // ----- Dashboard -----
 function SupDashboard(props){
-  const c=props.c, orders=c.supOrders();
+  const c=props.c, orders=c.scoredOrders();
   const pending=orders.filter(o=>o.status==='À confirmer');
   return React.createElement('div',null,
     React.createElement(SupHeader,{c,title:'Tableau de bord'}),
     React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16,marginBottom:24}},
-      statCard('À confirmer',String(pending.length),'demandes en attente','bolt','#E08600'),
+      statCard('À confirmer',String(pending.length),'triées par score IA','bolt','#E08600'),
       statCard('Vols en cours','1','sur 4 drones','drone','#1E7FE5'),
       statCard('Délai moyen','8,4 min','-1,2 min vs hier','clock','#1FA97A'),
       statCard('Livrées aujourd’hui','37','100% à l’heure','check','#1565D8')),
+    // Bandeau explicatif IA
+    React.createElement('div',{style:{display:'flex',gap:14,alignItems:'center',background:'linear-gradient(95deg,#15233B 0%,#1B3057 100%)',color:'#fff',borderRadius:16,padding:'16px 20px',marginBottom:20}},
+      React.createElement('span',{style:{flexShrink:0,width:42,height:42,borderRadius:11,background:'rgba(111,180,242,.18)',display:'flex',alignItems:'center',justifyContent:'center'}},Icon('gauge',22,'#6FB4F2')),
+      React.createElement('div',{style:{flex:1,minWidth:0}},
+        React.createElement('div',{style:{fontSize:13.5,fontWeight:800,marginBottom:3}},'Algorithme de priorisation IA actif'),
+        React.createElement('div',{style:{fontSize:12,color:'#AFC4E0',lineHeight:1.5}},'Score = urgence × 15 − temps_vol × 0.5 + attente × 0.05 · Tri décroissant pour traiter les plus critiques en premier.')),
+      React.createElement('span',{style:{fontSize:11.5,fontWeight:800,color:'#7FE3BC',background:'rgba(31,169,122,.18)',padding:'5px 11px',borderRadius:14,display:'inline-flex',alignItems:'center',gap:6}},React.createElement('span',{style:{width:7,height:7,borderRadius:'50%',background:'#1FA97A',animation:'mfblink 1.4s infinite'}}),'En ligne')),
     React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1.7fr 1fr',gap:20,alignItems:'start'}},
       React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:18,overflow:'hidden'}},
-        React.createElement('div',{style:{padding:'16px 20px',borderBottom:'1px solid #EEF3F9',fontSize:15.5,fontWeight:800}},'Demandes entrantes'),
-        React.createElement('div',{style:{display:'grid',gridTemplateColumns:'0.8fr 1.5fr 1fr 1fr 1fr',gap:10,padding:'10px 20px',fontSize:11,fontWeight:700,color:'#9CADC2',textTransform:'uppercase',letterSpacing:.4,borderBottom:'1px solid #F1F5FA'}},
-          React.createElement('span',null,'Réf'),React.createElement('span',null,'Demandeur'),React.createElement('span',null,'Priorité'),React.createElement('span',null,'Statut'),React.createElement('span',{style:{textAlign:'right'}},'Action')),
-        orders.map((o,i)=>React.createElement('div',{key:i,style:{display:'grid',gridTemplateColumns:'0.8fr 1.5fr 1fr 1fr 1fr',gap:10,padding:'14px 20px',alignItems:'center',borderBottom:i<orders.length-1?'1px solid #F4F7FB':'none',fontSize:13.5}},
+        React.createElement('div',{style:{padding:'16px 20px',borderBottom:'1px solid #EEF3F9',fontSize:15.5,fontWeight:800,display:'flex',alignItems:'center',gap:8}},'Demandes entrantes',React.createElement('span',{style:{fontSize:11,fontWeight:700,color:'#1565D8',background:'#EAF4FD',padding:'3px 9px',borderRadius:12,marginLeft:6}},'Triées par score IA ↓')),
+        React.createElement('div',{style:{display:'grid',gridTemplateColumns:'0.7fr 1.4fr 1.05fr 1fr 0.95fr',gap:10,padding:'10px 20px',fontSize:11,fontWeight:700,color:'#9CADC2',textTransform:'uppercase',letterSpacing:.4,borderBottom:'1px solid #F1F5FA'}},
+          React.createElement('span',null,'Réf'),React.createElement('span',null,'Demandeur'),React.createElement('span',null,'Score IA'),React.createElement('span',null,'Statut'),React.createElement('span',{style:{textAlign:'right'}},'Action')),
+        orders.map((o,i)=>React.createElement('div',{key:i,style:{display:'grid',gridTemplateColumns:'0.7fr 1.4fr 1.05fr 1fr 0.95fr',gap:10,padding:'14px 20px',alignItems:'center',borderBottom:i<orders.length-1?'1px solid #F4F7FB':'none',fontSize:13.5}},
           React.createElement('span',{style:{fontWeight:800,color:'#1565D8'}},o.id),
           React.createElement('div',null,React.createElement('div',{style:{fontWeight:700}},o.struct),React.createElement('div',{style:{fontSize:12,color:'#9CADC2'}},o.item)),
-          React.createElement('span',{style:{fontSize:12,fontWeight:700,color:o.prio==='Standard'?'#E08600':'#E5484D'}},o.prio),
+          React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8}},
+            React.createElement('span',{style:{fontSize:15,fontWeight:800,color:o.scoreColor,fontFamily:'monospace'}},o.score),
+            React.createElement('span',{style:{fontSize:10.5,fontWeight:800,color:o.scoreColor,background:o.scoreColor+'18',padding:'2px 7px',borderRadius:9,letterSpacing:.3,textTransform:'uppercase'}},o.scoreCat),
+            React.createElement('span',{style:{fontSize:10.5,color:'#9CADC2',fontWeight:600,whiteSpace:'nowrap'}},'U:'+o.urgence)),
           statusChip(o),
           React.createElement('div',{style:{textAlign:'right'}}, o.status==='À confirmer'
             ? React.createElement('button',{onClick:()=>c.goSup('order',{activeOrder:o}),style:{border:'none',background:'#1E7FE5',color:'#fff',padding:'8px 13px',borderRadius:9,fontSize:12.5,fontWeight:700,cursor:'pointer'}},'Traiter')
@@ -1126,18 +1189,37 @@ function SupDashboard(props){
 
 // ----- Order detail / confirm -----
 function SupOrder(props){
-  const c=props.c, o=c.state.activeOrder||c.supOrders()[0];
+  const c=props.c;
+  // Récupère la version scorée de la commande active (ou la 1re du flux trié si arrivée directe)
+  const stored=c.state.activeOrder;
+  const scored=c.scoredOrders();
+  const o=(stored&&stored.score!=null)?stored:(scored.find(function(x){return stored&&x.id===stored.id;})||stored||scored[0]);
   const row=(l,v)=>React.createElement('div',{style:{display:'flex',justifyContent:'space-between',padding:'11px 0',borderBottom:'1px solid #F4F7FB',fontSize:14}},React.createElement('span',{style:{color:'#5A6B82',fontWeight:600}},l),React.createElement('span',{style:{fontWeight:700,textAlign:'right'}},v));
   return React.createElement('div',null,
     React.createElement('a',{onClick:()=>c.goSup('dashboard'),style:{display:'inline-flex',alignItems:'center',gap:7,fontSize:13.5,fontWeight:700,color:'#5A6B82',cursor:'pointer',marginBottom:16}},Icon('back',16,'#5A6B82'),'Retour au tableau de bord'),
     React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:24}},
       React.createElement('div',null,React.createElement('h1',{style:{fontSize:26,fontWeight:800,letterSpacing:'-.4px'}},'Commande '+o.id),React.createElement('p',{style:{fontSize:14,color:'#5A6B82',marginTop:3}},o.struct+' · '+o.city)),
       statusChip(o)),
+    // Carte Score IA
+    o.score!=null&&React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:14,marginBottom:20}},
+      React.createElement('div',{style:{background:'#fff',border:'1px solid '+o.scoreColor+'40',borderRadius:14,padding:'14px 16px',borderLeft:'4px solid '+o.scoreColor}},
+        React.createElement('div',{style:{fontSize:11,fontWeight:700,color:'#9CADC2',textTransform:'uppercase',letterSpacing:.4,marginBottom:5}},'Score IA'),
+        React.createElement('div',{style:{fontSize:22,fontWeight:800,color:o.scoreColor,fontFamily:'monospace'}},o.score),
+        React.createElement('div',{style:{fontSize:11.5,fontWeight:700,color:o.scoreColor,marginTop:2}},o.scoreCat)),
+      React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:14,padding:'14px 16px'}},
+        React.createElement('div',{style:{fontSize:11,fontWeight:700,color:'#9CADC2',textTransform:'uppercase',letterSpacing:.4,marginBottom:5}},'Urgence médicale'),
+        React.createElement('div',{style:{fontSize:22,fontWeight:800}},o.urgence,React.createElement('span',{style:{fontSize:13,color:'#9CADC2',marginLeft:3,fontWeight:700}},'/10'))),
+      React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:14,padding:'14px 16px'}},
+        React.createElement('div',{style:{fontSize:11,fontWeight:700,color:'#9CADC2',textTransform:'uppercase',letterSpacing:.4,marginBottom:5}},'Distance estimée'),
+        React.createElement('div',{style:{fontSize:22,fontWeight:800}},o.distance_km,React.createElement('span',{style:{fontSize:13,color:'#9CADC2',marginLeft:3,fontWeight:700}},'km'))),
+      React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:14,padding:'14px 16px'}},
+        React.createElement('div',{style:{fontSize:11,fontWeight:700,color:'#9CADC2',textTransform:'uppercase',letterSpacing:.4,marginBottom:5}},'Temps de vol IA'),
+        React.createElement('div',{style:{fontSize:22,fontWeight:800}},Math.round(c.estimerTempsVol(o.distance_km,1)*10)/10,React.createElement('span',{style:{fontSize:13,color:'#9CADC2',marginLeft:3,fontWeight:700}},'min')))),
     React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1.4fr 1fr',gap:20,alignItems:'start'}},
       React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:18,padding:24}},
         React.createElement('div',{style:{fontSize:16,fontWeight:800,marginBottom:8}},'Détail de la commande'),
         row('Produit', o.item),
-        row('Priorité', React.createElement('span',{style:{color:o.prio==='Standard'?'#E08600':'#E5484D'}},o.prio)),
+        row('Score IA', o.score!=null?React.createElement('span',{style:{color:o.scoreColor,fontFamily:'monospace'}},o.score+' · '+o.scoreCat):'—'),
         row('Demandeur', o.struct),
         row('Destination', o.city),
         row('Reçue', "Aujourd'hui · 11:24"),
