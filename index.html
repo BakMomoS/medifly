@@ -380,7 +380,7 @@ function MFApp(props){
   else if(st.screen==='signup') body=React.createElement(SignupScreen,{c});
   else if(st.iface==='supplier') body=React.createElement(SupplierShell,{c});
   else body=React.createElement(ClientShell,{c});
-  return React.createElement('div',{style:{minHeight:'100vh'}}, body, React.createElement(ProtoNav,{c}));
+  return React.createElement('div',{style:{minHeight:'100vh'}}, body);
 }
 
 // ============== PROTO NAV ==============
@@ -420,18 +420,31 @@ function LoginScreen(props){
   const label={fontSize:12.5,fontWeight:700,color:'#3A4A60',marginBottom:7,display:'block'};
   const iconWrap={position:'absolute',left:14,top:38,pointerEvents:'none'};
   const enter=()=>{ const id=(c.state.loginId||'').toUpperCase(); if(id.includes('-F-')) c.setState({iface:'supplier',screen:'dashboard',supScreen:'dashboard'}); else c.setState({iface:'client',screen:'home'}); };
+
+  // Carrousel d'images (défilement toutes les 5 s)
+  const images=['assets/login-banners/img1.jpg','assets/login-banners/img2.jpg','assets/login-banners/img3.jpg'];
+  const [bi,setBi]=React.useState(0);
+  React.useEffect(function(){
+    const t=setInterval(function(){ setBi(function(i){return (i+1)%images.length;}); },5000);
+    return function(){ clearInterval(t); };
+  },[]);
+
   return React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1.05fr 1fr',minHeight:'100vh'}},
-    React.createElement('div',{style:{position:'relative',background:'linear-gradient(150deg,#1E7FE5 0%,#1565D8 60%,#0F4FB0 100%)',overflow:'hidden',display:'flex',flexDirection:'column',justifyContent:'space-between',padding:'48px 56px',color:'#fff'}},
-      React.createElement('div',{style:{position:'absolute',width:520,height:520,borderRadius:'50%',background:'rgba(255,255,255,.07)',top:-160,right:-140}}),
-      React.createElement('div',{style:{position:'absolute',width:300,height:300,borderRadius:'50%',background:'rgba(255,255,255,.06)',bottom:-90,left:-70}}),
-      React.createElement('div',{style:{position:'relative',zIndex:2,background:'#fff',borderRadius:14,padding:'10px 16px',display:'inline-flex',width:'fit-content',boxShadow:'0 8px 24px rgba(0,0,0,.12)'}},React.createElement(Logo,{h:44})),
+    React.createElement('div',{style:{position:'relative',background:'#0F4FB0',overflow:'hidden',display:'flex',flexDirection:'column',justifyContent:'space-between',padding:'48px 56px',color:'#fff',minHeight:'100vh'}},
+      // Couches d'images en crossfade
+      images.map(function(src,i){return React.createElement('div',{key:src,style:{position:'absolute',inset:0,backgroundImage:'url("'+src+'")',backgroundSize:'cover',backgroundPosition:'center',opacity:bi===i?1:0,transition:'opacity 1.2s ease-in-out',zIndex:0}});}),
+      // Voile dégradé pour la lisibilité du texte
+      React.createElement('div',{style:{position:'absolute',inset:0,background:'linear-gradient(150deg,rgba(15,79,176,.78) 0%,rgba(21,101,216,.55) 55%,rgba(15,35,59,.78) 100%)',zIndex:1}}),
+      // Logo
+      React.createElement('div',{style:{position:'relative',zIndex:2,background:'#fff',borderRadius:14,padding:'10px 16px',display:'inline-flex',width:'fit-content',boxShadow:'0 8px 24px rgba(0,0,0,.18)'}},React.createElement(Logo,{h:44})),
+      // Texte principal
       React.createElement('div',{style:{position:'relative',zIndex:2}},
-        React.createElement('div',{style:{display:'inline-flex',alignItems:'center',gap:8,background:'rgba(255,255,255,.16)',padding:'7px 14px',borderRadius:30,fontSize:13,fontWeight:700,marginBottom:22}},Icon('drone',15,'#fff'),'Livraison médicale par drone · Maroc'),
-        React.createElement('h1',{style:{fontSize:42,lineHeight:1.1,fontWeight:800,letterSpacing:'-.5px',margin:'0 0 16px'}},'Quand vos médicaments volent vers vous.'),
-        React.createElement('p',{style:{fontSize:16,lineHeight:1.6,opacity:.92,maxWidth:430}},"Plateforme nationale de livraison de produits médicaux d'urgence pour les structures de santé.")),
-      React.createElement('div',{style:{position:'relative',zIndex:2,display:'flex',gap:26}},
-        [['< 2 min','Décollage'],['9 min','Livraison moy.'],['24/7','Disponible']].map((s,i)=>React.createElement('div',{key:i},React.createElement('div',{style:{fontSize:24,fontWeight:800}},s[0]),React.createElement('div',{style:{fontSize:12.5,opacity:.8,fontWeight:600}},s[1])))),
-      React.createElement('div',{style:{position:'absolute',right:46,top:'38%',zIndex:1,animation:'mffloat 4s ease-in-out infinite',opacity:.92}},Icon('drone',150,'rgba(255,255,255,.85)'))),
+        React.createElement('div',{style:{display:'inline-flex',alignItems:'center',gap:8,background:'rgba(255,255,255,.18)',padding:'7px 14px',borderRadius:30,fontSize:13,fontWeight:700,marginBottom:22,backdropFilter:'blur(6px)'}},Icon('drone',15,'#fff'),'Livraison médicale par drone · Maroc'),
+        React.createElement('h1',{style:{fontSize:42,lineHeight:1.1,fontWeight:800,letterSpacing:'-.5px',margin:'0 0 16px',textShadow:'0 2px 18px rgba(0,0,0,.35)'}},'Quand vos médicaments volent vers vous.'),
+        React.createElement('p',{style:{fontSize:16,lineHeight:1.6,opacity:.95,maxWidth:430,textShadow:'0 1px 8px rgba(0,0,0,.3)'}},"Plateforme nationale de livraison de produits médicaux d'urgence pour les structures de santé.")),
+      // Pagination du carrousel
+      React.createElement('div',{style:{position:'relative',zIndex:2,display:'flex',gap:9,alignItems:'center'}},
+        images.map(function(_,i){return React.createElement('button',{key:i,onClick:function(){setBi(i);},'aria-label':'Image '+(i+1),style:{width:bi===i?32:10,height:6,borderRadius:3,border:'none',background:bi===i?'#fff':'rgba(255,255,255,.5)',cursor:'pointer',padding:0,transition:'all .3s'}});}))),
     React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'center',padding:'40px',background:'#F7FBFF'}},
       React.createElement('div',{style:{width:'100%',maxWidth:380,animation:'mfin .5s ease'}},
         React.createElement('div',{style:{fontSize:13,fontWeight:700,color:'#1E7FE5',marginBottom:6}},'Espace structure'),
@@ -453,10 +466,7 @@ function LoginScreen(props){
           React.createElement('span',{style:{fontSize:11.5,color:'#9CADC2',fontWeight:700}},'Démo :'),
           React.createElement('button',{onClick:()=>c.setState({loginId:'MF-D-48217'}),style:{flex:1,border:'1.5px solid #E2EAF2',background:'#fff',color:'#1565D8',fontSize:11.5,fontWeight:700,padding:'7px',borderRadius:9,cursor:'pointer'}},'Demandeur'),
           React.createElement('button',{onClick:()=>c.setState({loginId:'MF-F-90413'}),style:{flex:1,border:'1.5px solid #E2EAF2',background:'#fff',color:'#E08600',fontSize:11.5,fontWeight:700,padding:'7px',borderRadius:9,cursor:'pointer'}},'Fournisseur')),
-        React.createElement('div',{style:{textAlign:'center',marginTop:18,fontSize:13.5,color:'#5A6B82'}},'Nouvelle structure ? ',React.createElement('a',{onClick:()=>c.go('signup',{signupStep:1}),style:{color:'#1E7FE5',fontWeight:700,cursor:'pointer'}},'Créer un compte')),
-        React.createElement('div',{style:{marginTop:24,padding:'13px 16px',background:'#FDECEC',borderRadius:12,display:'flex',gap:11,alignItems:'center'}},
-          React.createElement('span',{style:{flexShrink:0,width:34,height:34,borderRadius:'50%',background:'#E5484D',display:'flex',alignItems:'center',justifyContent:'center'}},Icon('bolt',17,'#fff')),
-          React.createElement('div',{style:{fontSize:12.5,color:'#9B2C30',lineHeight:1.45}},React.createElement('b',null,'Urgence vitale ? '),'Composez le 141 (SAMU). MediFly complète les secours.')))
+        React.createElement('div',{style:{textAlign:'center',marginTop:18,fontSize:13.5,color:'#5A6B82'}},'Nouvelle structure ? ',React.createElement('a',{onClick:()=>c.go('signup',{signupStep:1}),style:{color:'#1E7FE5',fontWeight:700,cursor:'pointer'}},'Créer un compte')))
     )
   );
 }
@@ -1036,13 +1046,15 @@ function HistoryScreen(props){
 // ============== SUPPLIER SHELL (Interface 2 - répondeur) ==============
 function SupplierShell(props){
   const c=props.c, sup=c.state.supScreen, collapsed=c.state.supNavCollapsed;
-  const nav=[['grid','Tableau de bord','dashboard'],['box','Commandes','order'],['drone','Données de vol','flight'],['clock','Historique','history']];
+  const goAbout=function(){ c.setState({iface:'client',screen:'about',returnIface:'supplier'}); window.scrollTo&&window.scrollTo(0,0); };
+  const nav=[['grid','Tableau de bord','dashboard'],['box','Commandes','order'],['drone','Données de vol','flight'],['clock','Historique','history'],['eye','Découvrir MediFly','__about']];
+  const navClick=function(target){ if(target==='__about') goAbout(); else c.goSup(target); };
   const content = sup==='order'?React.createElement(SupOrder,{c}) : sup==='flight'?React.createElement(SupFlight,{c}) : sup==='history'?React.createElement(SupHistory,{c}) : React.createElement(SupDashboard,{c});
 
   // barre latérale repliée : rail d'icônes
   const railCollapsed = React.createElement('div',{style:{width:62,background:'#15233B',display:'flex',flexDirection:'column',alignItems:'center',padding:'18px 0',flexShrink:0,gap:6}},
     React.createElement('div',{onClick:()=>c.toggleSupNav(),title:'Afficher le menu',style:{width:40,height:40,borderRadius:11,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',background:'#1E2E47',marginBottom:10}},Icon('menu',20,'#9FB2CB')),
-    nav.map(n=>{const a=sup===n[2];return React.createElement('div',{key:n[2],onClick:()=>c.goSup(n[2]),title:n[1],style:{width:40,height:40,borderRadius:11,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',background:a?'#1E7FE5':'transparent'}},Icon(n[0],20,a?'#fff':'#7E92AB'));}),
+    nav.map(n=>{const a=sup===n[2];return React.createElement('div',{key:n[2],onClick:()=>navClick(n[2]),title:n[1],style:{width:40,height:40,borderRadius:11,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',background:a?'#1E7FE5':'transparent'}},Icon(n[0],20,a?'#fff':'#7E92AB'));}),
     React.createElement('div',{onClick:()=>c.go('login'),title:'Déconnexion',style:{marginTop:'auto',width:40,height:40,borderRadius:11,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer'}},Icon('logout',20,'#7E92AB')));
 
   // barre latérale complète
@@ -1051,7 +1063,7 @@ function SupplierShell(props){
       React.createElement('div',{style:{background:'#fff',borderRadius:11,padding:'9px 13px',display:'inline-flex'}},React.createElement(Logo,{h:24})),
       React.createElement('div',{onClick:()=>c.toggleSupNav(),title:'Masquer le menu',style:{width:34,height:34,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',background:'#1E2E47'}},Icon('back',18,'#9FB2CB'))),
     React.createElement('div',{style:{fontSize:11,color:'#6B7F99',fontWeight:700,textTransform:'uppercase',letterSpacing:.6,padding:'10px 8px 12px'}},'Espace fournisseur'),
-    nav.map(n=>{const a=sup===n[2];return React.createElement('div',{key:n[2],onClick:()=>c.goSup(n[2]),style:{display:'flex',alignItems:'center',gap:12,padding:'11px 14px',borderRadius:11,marginBottom:4,cursor:'pointer',background:a?'#1E7FE5':'transparent',color:a?'#fff':'#A9BACF',fontSize:14,fontWeight:700}},Icon(n[0],19,a?'#fff':'#7E92AB'),n[1]);}),
+    nav.map(n=>{const a=sup===n[2];return React.createElement('div',{key:n[2],onClick:()=>navClick(n[2]),style:{display:'flex',alignItems:'center',gap:12,padding:'11px 14px',borderRadius:11,marginBottom:4,cursor:'pointer',background:a?'#1E7FE5':'transparent',color:a?'#fff':'#A9BACF',fontSize:14,fontWeight:700}},Icon(n[0],19,a?'#fff':'#7E92AB'),n[1]);}),
     React.createElement('div',{style:{marginTop:'auto'}},
       React.createElement('div',{style:{background:'#1E2E47',borderRadius:13,padding:'14px',color:'#C7D4E4',marginBottom:8}},
         React.createElement('div',{style:{fontSize:12,fontWeight:700,marginBottom:6,display:'flex',gap:7,alignItems:'center'}},React.createElement('span',{style:{width:8,height:8,borderRadius:'50%',background:'#1FA97A'}}),'Système opérationnel'),
@@ -1222,14 +1234,25 @@ function srcLink(label,url,onDark){
 function AboutHero(props){
   const c=props.c;
   const jump=[['about-team',"L'Équipe"],['about-need','Le Besoin'],['about-solution','La Solution'],['about-journey','Notre Parcours'],['about-future','Perspectives']];
+  // Bouton retour vers l'espace d'origine (fournisseur / demandeur / connexion)
+  const ri=c.state.returnIface;
+  const goBack=function(){
+    if(ri==='supplier') c.setState({iface:'supplier',screen:'dashboard',supScreen:'dashboard',returnIface:null});
+    else if(c.state.loginId) c.setState({iface:'client',screen:'home',returnIface:null});
+    else c.setState({screen:'login',returnIface:null});
+  };
   return React.createElement('div',{id:'about-top',style:{position:'relative',overflow:'hidden',background:'linear-gradient(150deg,#15233B 0%,#19314F 52%,#11427C 100%)',color:'#fff'}},
     React.createElement('div',{style:{position:'absolute',width:560,height:560,borderRadius:'50%',background:'rgba(91,176,245,.10)',top:-200,right:-140,zIndex:0}}),
     React.createElement('div',{style:{position:'absolute',width:300,height:300,borderRadius:'50%',background:'rgba(91,176,245,.08)',bottom:-120,left:-80,zIndex:0}}),
+    // Barre de retour
+    React.createElement('div',{style:{position:'relative',zIndex:2,maxWidth:1200,margin:'0 auto',padding:'18px 24px 0',display:'flex',justifyContent:'space-between',alignItems:'center'}},
+      React.createElement('div',{onClick:goBack,style:{display:'inline-flex',alignItems:'center',gap:8,fontSize:13.5,fontWeight:700,color:'#AFC4E0',cursor:'pointer',padding:'7px 13px',borderRadius:9,border:'1px solid rgba(255,255,255,.14)',background:'rgba(255,255,255,.04)'}},Icon('back',16,'#AFC4E0'),ri==='supplier'?'Retour à mon espace fournisseur':c.state.loginId?'Retour à mon espace':'Retour à la connexion'),
+      React.createElement('div',{style:{background:'#fff',borderRadius:10,padding:'6px 12px',display:'inline-flex'}},React.createElement(Logo,{h:22}))),
     React.createElement('div',{style:{maxWidth:1200,margin:'0 auto',padding:'92px 24px 60px',position:'relative',zIndex:1,display:'grid',gridTemplateColumns:'1.04fr .96fr',gap:52,alignItems:'center'}},
       React.createElement('div',null,
         React.createElement('div',{style:{display:'inline-flex',alignItems:'center',gap:8,background:'rgba(255,255,255,.12)',border:'1px solid rgba(255,255,255,.16)',padding:'7px 14px',borderRadius:30,fontSize:12.5,fontWeight:700,marginBottom:22}},Icon('drone',15,'#6FB4F2'),'PLBD · École Centrale Casablanca'),
         React.createElement('h1',{style:{fontSize:46,lineHeight:1.08,fontWeight:800,letterSpacing:'-1px',margin:'0 0 18px'}},'Quand chaque minute compte, MediFly vole.'),
-        React.createElement('p',{style:{fontSize:17,lineHeight:1.6,color:'#C7D6EB',maxWidth:520,marginBottom:24}},'MediFly est un écosystème complet : un drone quadricoptère autonome et une plateforme digitale de commande de produits médicaux critiques — vaccins, poches de sang, antidotes, sérums antivenimeux — pour le Maroc et l’Afrique.'),
+        React.createElement('p',{style:{fontSize:17,lineHeight:1.6,color:'#C7D6EB',maxWidth:520,marginBottom:24}},"Notre solution est une plateforme de livraison de produits médicaux utilisant des drones, conçue pour le Maroc et l’Afrique : vaccins, poches de sang, antidotes, sérums antivenimeux livrés là où la route ne va pas."),
         React.createElement('div',{style:{display:'flex',gap:14,marginBottom:30,flexWrap:'wrap'}},
           React.createElement('button',{onClick:()=>c.go('home'),style:{border:'none',background:'#1E7FE5',color:'#fff',padding:'14px 24px',borderRadius:13,fontSize:15,fontWeight:700,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:9,boxShadow:'0 10px 26px rgba(30,127,229,.4)'}},Icon('cart',18,'#fff'),'Passer commande'),
           React.createElement('button',{onClick:()=>aboutScrollTo('about-need'),style:{border:'1.5px solid rgba(255,255,255,.25)',background:'rgba(255,255,255,.06)',color:'#fff',padding:'14px 22px',borderRadius:13,fontSize:15,fontWeight:700,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:9}},'Découvrir le projet',Icon('chevron',17,'#fff'))),
@@ -1274,7 +1297,7 @@ function AboutTeam(props){
         React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:18,padding:'24px',display:'flex',gap:18,alignItems:'center'}},
           React.createElement(PhotoCircle,{size:78}),
           React.createElement('div',null,
-            React.createElement('div',{style:{fontSize:12,fontWeight:800,color:'#9CADC2',textTransform:'uppercase',letterSpacing:.6,marginBottom:5}},'Contributeur'),
+            React.createElement('div',{style:{fontSize:12,fontWeight:800,color:'#9CADC2',textTransform:'uppercase',letterSpacing:.6,marginBottom:5}},"Ancien membre de l'équipe"),
             React.createElement('div',{style:{fontSize:18,fontWeight:800}},'Bastien Beille'),
             React.createElement('div',{style:{fontSize:13,color:'#5A6B82',marginTop:5,lineHeight:1.5}},'A contribué de manière significative aux premières phases du projet avant de quitter l’École Centrale Casablanca.')))))
   );
