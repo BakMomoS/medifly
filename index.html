@@ -1,0 +1,1454 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Plus Jakarta Sans',system-ui,sans-serif;color:#15233B;background:#F2F8FE;-webkit-font-smoothing:antialiased}
+  ::selection{background:#cfe5fb}
+  input,button,textarea,select{font-family:inherit}
+  @keyframes mffloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-9px)}}
+  @keyframes mfpulse{0%{box-shadow:0 0 0 0 rgba(229,72,77,.45)}70%{box-shadow:0 0 0 14px rgba(229,72,77,0)}100%{box-shadow:0 0 0 0 rgba(229,72,77,0)}}
+  @keyframes mfdash{to{stroke-dashoffset:-26}}
+  @keyframes mfin{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes mfwinch{0%,100%{transform:translateY(0)}50%{transform:translateY(7px)}}
+  @keyframes mfwinchup{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
+  @keyframes mfflash{0%{opacity:.9}100%{opacity:0}}
+  @keyframes mfscan{0%{transform:translateY(-100%)}100%{transform:translateY(100%)}}
+  @keyframes mfblink{0%,100%{opacity:1}50%{opacity:.35}}
+  .leaflet-container{background:#dbe9f7;font-family:'Plus Jakarta Sans',system-ui,sans-serif}
+  .mf-tip{background:rgba(255,255,255,.96);border:none;border-radius:8px;font-size:11px;font-weight:700;color:#15233B;box-shadow:0 4px 12px rgba(21,35,59,.18);padding:3px 9px}
+  .mf-tip:before{display:none}
+</style>
+</helmet>
+<div style="min-height:100vh;width:100%">{{ app }}</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = {
+    iface: 'client',          // 'client' (demandeur) | 'supplier' (répondeur)
+    screen: 'login',
+    signupStep: 1,
+    structureType: 'Hôpital',
+    cat: 'all',
+    activeProduct: null,
+    cart: [],
+    note: '',
+    flyProgress: 0.42,
+    supScreen: 'dashboard',   // dashboard | order | flight | history
+    activeOrder: null,
+    navOpen: true,
+    supNavCollapsed: false,   // masquer/afficher la barre latérale fournisseur
+    camOpen: false,           // retour vidéo plein écran sur la map
+    camUrl: '',               // URL du flux vidéo de la caméra (fournie ultérieurement)
+    photoFlash: false,        // animation de capture photo
+    photoCount: 0,            // nombre de photos prises
+    now: Date.now(),          // horloge live (date / heure)
+    loginId: 'MF-D-48217',
+    signupId: '',
+    bannerIdx: 0,
+  };
+
+  componentDidMount(){
+    // récupère l'URL du flux caméra ESP32-CAM mémorisée
+    try{ var u=localStorage.getItem('mf_cam_url'); if(u) this.setState({camUrl:u}); }catch(e){}
+    this._t = setInterval(()=>{
+      const s=this.state;
+      const flying = (s.iface==='client'&&s.screen==='tracking') || (s.iface==='supplier'&&s.supScreen==='flight');
+      this.setState({now:Date.now()});
+      if(flying && !s.serialOn) this.setState(st=>({flyProgress: Math.min(1, st.flyProgress + 0.012)}));
+    }, 650);
+    this._bt = setInterval(()=>this.setState(s=>({bannerIdx:((s.bannerIdx||0)+1)%3})), 10000);
+  }
+  componentWillUnmount(){ clearInterval(this._t); clearInterval(this._bt); this.disconnectSerial(); }
+
+  go(screen, extra){
+    const from = this.state.screen;
+    // Mémorise la position de défilement du catalogue avant d'ouvrir une fiche produit
+    if(from==='home') this._homeScroll = window.pageYOffset||0;
+    this.setState(Object.assign({screen}, extra||{}));
+    // En revenant du détail produit vers le catalogue, restaure la position précédente
+    if(screen==='home' && from==='product' && this._homeScroll){
+      const y=this._homeScroll;
+      requestAnimationFrame(()=>requestAnimationFrame(()=>window.scrollTo&&window.scrollTo(0,y)));
+    } else {
+      window.scrollTo&&window.scrollTo(0,0);
+    }
+  }
+  goSup(supScreen, extra){ this.setState(Object.assign({supScreen}, extra||{})); window.scrollTo&&window.scrollTo(0,0); }
+  setIface(iface){ this.setState({iface, screen: iface==='client'?'home':'dashboard', supScreen:'dashboard'}); }
+
+  // ---------- DATA ----------
+  cats(){ return [
+    {id:'blood', name:'Sang', icon:'blood'},
+    {id:'vaccine', name:'Vaccins', icon:'vaccine'},
+    {id:'serum', name:'Sérums', icon:'serum'},
+    {id:'antidote', name:'Antidotes', icon:'shield'},
+    {id:'med', name:'Médicaments', icon:'pill'},
+    {id:'gear', name:'Matériel', icon:'kit'},
+  ]; }
+
+  products(){ return [
+    {id:'p1', name:'Poche de sang', cat:'blood', catName:'Sang', eta:11, stock:'Stock limité', urgent:true, tint:'#EAF1F8', tag:'blood', img:'assets/products/poche-sang.jpg',
+      desc:"Concentré de globules rouges, transport en chaîne du froid certifié. Sélection du groupe sanguin obligatoire.",
+      requiresOptions:true, optionLabel:'Groupe sanguin', options:['O−','O+','A−','A+','B−','B+','AB−','AB+']},
+    {id:'p2', name:'Plasma sanguin frais', cat:'blood', catName:'Sang', eta:12, stock:'En stock', urgent:false, tint:'#EAF1F8', tag:'blood', img:'assets/products/plasma.jpg',
+      desc:"Plasma frais congelé pour troubles de la coagulation. Conservation à −25°C.",
+      requiresOptions:true, optionLabel:'Groupe sanguin', options:['O','A','B','AB']},
+    {id:'p3', name:'Vaccin antitétanique', cat:'vaccine', catName:'Vaccins', eta:10, stock:'En stock', urgent:false, tint:'#EAF1F8', tag:'vaccine', img:'assets/products/vaccin-tetanos.jpg',
+      desc:"Sérum antitétanique pour prophylaxie d'urgence. Chaîne du froid 2–8°C."},
+    {id:'p4', name:'Vaccin antirabique', cat:'vaccine', catName:'Vaccins', eta:12, stock:'En stock', urgent:true, tint:'#EAF1F8', tag:'vaccine', img:'assets/products/vaccin-rage.jpg',
+      desc:"Vaccin contre la rage à administrer après exposition. Conservation réfrigérée."},
+    {id:'p5', name:'Sérum physiologique 1L', cat:'serum', catName:'Sérums', eta:9, stock:'En stock', urgent:false, tint:'#EAF1F8', tag:'serum', img:'assets/products/serum-physio.jpg',
+      desc:"Solution de remplissage vasculaire NaCl 0,9%, poche souple stérile."},
+    {id:'p6', name:'Sérum antivenimeux', cat:'serum', catName:'Sérums', eta:13, stock:'Stock limité', urgent:true, tint:'#EAF1F8', tag:'serum', img:'assets/products/antivenin.jpg',
+      desc:"Antivenin polyvalent contre les morsures de serpents et piqûres de scorpions."},
+    {id:'p7', name:'Naloxone 0,4mg', cat:'antidote', catName:'Antidotes', eta:8, stock:'En stock', urgent:true, tint:'#EAF1F8', tag:'shield', img:'assets/products/naloxone.jpg',
+      desc:"Antidote d'urgence aux surdoses d'opioïdes. Solution injectable."},
+    {id:'p8', name:'Atropine 1mg', cat:'antidote', catName:'Antidotes', eta:9, stock:'En stock', urgent:true, tint:'#EAF1F8', tag:'shield', img:'assets/products/atropine.jpg',
+      desc:"Antidote aux intoxications aux organophosphorés et bradycardies sévères."},
+    {id:'p9', name:'Adrénaline 1mg/mL', cat:'med', catName:'Médicaments', eta:7, stock:'En stock', urgent:true, tint:'#EAF1F8', tag:'pill', img:'assets/products/adrenaline.jpg',
+      desc:"Solution injectable pour arrêt cardiaque et choc anaphylactique."},
+    {id:'p10', name:'Insuline rapide', cat:'med', catName:'Médicaments', eta:10, stock:'En stock', urgent:false, tint:'#EAF1F8', tag:'pill', img:'assets/products/insuline.jpg',
+      desc:"Flacon réfrigéré pour le traitement de l'acidocétose diabétique."},
+    {id:'p11', name:'Kit de suture stérile', cat:'gear', catName:'Matériel', eta:10, stock:'En stock', urgent:false, tint:'#EAF1F8', tag:'kit', img:'assets/products/kit-suture.jpg',
+      desc:"Kit complet à usage unique pour la fermeture de plaies profondes."},
+    {id:'p12', name:'Oxygène portable', cat:'gear', catName:'Matériel', eta:14, stock:'Stock limité', urgent:false, tint:'#EAF1F8', tag:'kit', img:'assets/products/supplies.jpg',
+      desc:"Bouteille d'oxygène médical portable avec détendeur intégré."},
+    {id:'p13', name:'Trousse de premier secours', cat:'gear', catName:'Matériel', eta:9, stock:'En stock', urgent:false, tint:'#EAF1F8', tag:'kit', img:'assets/products/trousse-secours.jpg',
+      desc:"Trousse complète de premiers secours : pansements, compresses stériles, antiseptique, bandes et ciseaux."},
+  ]; }
+
+  visibleProducts(){
+    const p=this.products();
+    let list = this.state.cat==='all'?p:p.filter(x=>x.cat===this.state.cat);
+    const q=(this.state.query||'').trim().toLowerCase();
+    if(q) list=list.filter(x=>x.name.toLowerCase().includes(q)||x.catName.toLowerCase().includes(q));
+    return list;
+  }
+
+  // cart keyed by id + option
+  keyOf(id,opt){ return opt?id+'::'+opt:id; }
+  qtyInCart(id,opt){ const it=this.state.cart.find(i=>i.key===this.keyOf(id,opt)); return it?it.qty:0; }
+  addToCart(p,opt){
+    this.setState(s=>{
+      const key=this.keyOf(p.id,opt);
+      const c=s.cart.slice(); const f=c.find(i=>i.key===key);
+      if(f) f.qty++; else c.push(Object.assign({},p,{key,opt:opt||null,qty:1}));
+      return {cart:c};
+    });
+  }
+  setQtyKey(key,d){
+    this.setState(s=>({cart: s.cart.map(i=>i.key===key?Object.assign({},i,{qty:i.qty+d}):i).filter(i=>i.qty>0)}));
+  }
+  cartCount(){ return this.state.cart.reduce((n,i)=>n+i.qty,0); }
+  fastEta(){ const e=this.state.cart.map(i=>i.eta); return e.length?Math.max.apply(null,e):0; }
+
+  // caméra embarquée + barre latérale
+  toggleSupNav(){ this.setState(s=>({supNavCollapsed:!s.supNavCollapsed})); }
+  openCam(){ this.setState({camOpen:true}); }
+  closeCam(){ this.setState({camOpen:false}); }
+  capturePhoto(){
+    this.setState(s=>({photoFlash:true, photoCount:s.photoCount+1}));
+    setTimeout(()=>{ try{ this.setState({photoFlash:false}); }catch(e){} }, 420);
+  }
+  // configuration de l'URL du flux ESP32-CAM (MJPEG WiFi)
+  toggleCamConfig(){ this.setState(s=>({camConfig:!s.camConfig})); }
+  setCamUrl(u){ try{ localStorage.setItem('mf_cam_url', u||''); }catch(e){} this.setState({camUrl:u||'', camErr:false, camConfig:false}); }
+
+  // ===== Connexion USB au firmware (Web Serial API) =====
+  async connectSerial(){
+    if(!('serial' in navigator)){ this.setState({serialErr:"Web Serial non supporté par ce navigateur (utilisez Chrome/Edge sur HTTPS)."}); return; }
+    try{
+      const port = await navigator.serial.requestPort();
+      await port.open({ baudRate: 115200 });
+      this._port = port;
+      this.setState({serialOn:true, serialErr:'', live:{}});
+      this._readSerial();
+    }catch(e){
+      this.setState({serialErr: e&&e.message? e.message : 'Connexion annulée.'});
+    }
+  }
+  async _readSerial(){
+    const dec = new TextDecoder();
+    let buf='';
+    try{
+      this._reader = this._port.readable.getReader();
+      while(true){
+        const {value, done} = await this._reader.read();
+        if(done) break;
+        buf += dec.decode(value, {stream:true});
+        let nl;
+        while((nl = buf.indexOf('\n')) >= 0){
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl+1);
+          if(line) this._parseTelemetry(line);
+        }
+      }
+    }catch(e){ /* lecture interrompue */ }
+  }
+  _parseTelemetry(line){
+    const L = Object.assign({}, this.state.live||{});
+    const num = re => { const m=line.match(re); return m? parseFloat(m[1]) : null; };
+    let v;
+    // Format firmware MediFly : [DBG] R:.. P:.. | pidR:.. pidP:.. pidY:.. | THR:.. |
+    //                          Alt:..m T:..°C | GPS:FIX/--- Sats:.. Lat:.. Lng:.. | Armed:OUI/NON
+    if((v=num(/\bR:\s*(-?\d+(?:\.\d+)?)/))   !=null) L.roll=v;   // MPU6050 roll
+    if((v=num(/\bP:\s*(-?\d+(?:\.\d+)?)/))   !=null) L.pitch=v;  // MPU6050 pitch
+    if((v=num(/THR:\s*(\d+)/))                !=null) L.thr=v;    // throttle µs
+    if((v=num(/Alt:\s*(-?\d+(?:\.\d+)?)/i))  !=null) L.alt=v;    // BMP280 altitude relative
+    if((v=num(/\bT:\s*(-?\d+(?:\.\d+)?)/))   !=null) L.temp=v;   // BMP280 température
+    if((v=num(/Sats:\s*(\d+)/i))             !=null) L.sats=v;   // GPS satellites
+    if((v=num(/Lat:\s*(-?\d+(?:\.\d+)?)/i))  !=null) L.lat=v;    // GPS latitude
+    if((v=num(/Lng:\s*(-?\d+(?:\.\d+)?)/i))  !=null) L.lon=v;    // GPS longitude
+    if(/GPS:\s*FIX/i.test(line))      L.gpsFix=true;
+    else if(/GPS:\s*-{2,}/.test(line)) L.gpsFix=false;
+    if(/Armed:\s*OUI/i.test(line))     L.armed=true;
+    else if(/Armed:\s*NON/i.test(line)) L.armed=false;
+    // événements treuil optionnels : [WINCH] Descente / Remontée / Arrêt
+    if(/\[WINCH\]/i.test(line)){
+      if(/Descente/i.test(line)) L.boxMotion='descending';
+      else if(/Remont/i.test(line)) L.boxMotion='ascending';
+      else if(/Arr/i.test(line)) L.boxMotion='idle';
+    }
+    L._t = Date.now();
+    this.setState({live:L});
+  }
+  async disconnectSerial(){
+    try{ if(this._reader){ await this._reader.cancel(); this._reader.releaseLock(); } }catch(e){}
+    try{ if(this._port){ await this._port.close(); } }catch(e){}
+    this._reader=null; this._port=null;
+    if(this.state) this.setState({serialOn:false});
+  }
+
+  // order history (mock)
+  clientOrders(){ return [
+    {id:'MF-2026-0481', date:"Aujourd'hui · 11:24", items:'Naloxone ×2', status:'En vol', c:'#1E7FE5'},
+    {id:'MF-2026-0477', date:'Hier · 18:02', items:'Poche de sang O− ×1, Adrénaline ×3', status:'Livrée', c:'#1FA97A'},
+    {id:'MF-2026-0468', date:'14 juin · 09:41', items:'Sérum antivenimeux ×2', status:'Livrée', c:'#1FA97A'},
+    {id:'MF-2026-0455', date:'12 juin · 22:15', items:'Vaccin antirabique ×4', status:'Annulée', c:'#9CADC2'},
+  ]; }
+  supOrders(){ return [
+    {id:'MF-0481', struct:'CHU Ibn Rochd', city:'Casablanca', item:'Naloxone 0,4mg ×2', prio:'Urgence vitale', status:'À confirmer', c:'#E08600'},
+    {id:'MF-0480', struct:'Hôpital 20 Août', city:'Casablanca', item:'Poche sang O− ×1', prio:'Urgence vitale', status:'À confirmer', c:'#E08600'},
+    {id:'MF-0479', struct:'Pharmacie Atlas', city:'Mohammedia', item:'Insuline rapide ×3', prio:'Standard', status:'Confirmée', c:'#1565D8'},
+    {id:'MF-0478', struct:'Dispensaire Sidi Moumen', city:'Casablanca', item:'Sérum physio ×6', prio:'Standard', status:'En vol', c:'#1E7FE5'},
+    {id:'MF-0476', struct:'CHU Ibn Rochd', city:'Casablanca', item:'Adrénaline ×4', prio:'Urgence vitale', status:'Livrée', c:'#1FA97A'},
+  ]; }
+
+  // flight telemetry from progress (simulée) — fusionnée avec les données live USB du firmware si connecté
+  telemetry(){
+    const p=this.state.flyProgress;
+    const d=new Date(this.state.now||Date.now());
+    const pad=n=>(n<10?'0':'')+n;
+    const alt = p>=1?0:Math.round(55+Math.sin(p*Math.PI)*75);
+    // mouvement vertical de la box (treuil) : montée au chargement, descente à la livraison
+    let boxMotion='idle';
+    if(p>0.01 && p<0.12) boxMotion='ascending';
+    else if(p>=0.88 && p<1) boxMotion='descending';
+    const out = {
+      progress:p,
+      eta: Math.max(0, Math.round((1-p)*9)),
+      dist: ((1-p)*8.4).toFixed(1),
+      alt: alt,                                  // BMP280 — altitude relative (m)
+      speed: p>=1?0:64,                          // GPS — vitesse sol (km/h)
+      bat: Math.round(92-p*24),
+      temp: (24.5 - alt*0.035).toFixed(1),       // BMP280 — température extérieure (°C)
+      lat: (33.5731+p*0.02).toFixed(5),          // GPS NEO-6M
+      lon: (-7.5898+p*0.015).toFixed(5),
+      sats: p>0.3?11:8,                          // GPS — satellites
+      heading: Math.round((74+Math.sin(p*6)*12+360)%360), // GPS — cap
+      roll: (Math.sin((this.state.now||0)/700)*2.4).toFixed(1),   // MPU6050
+      pitch: (Math.cos((this.state.now||0)/900)*2.0).toFixed(1),
+      gpsFix: true,
+      armed: p>0 && p<1,
+      time: pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds()),
+      date: pad(d.getDate())+'/'+pad(d.getMonth()+1)+'/'+d.getFullYear(),
+      boxMotion: boxMotion,
+      source: 'Simulation',
+    };
+    // Fusion avec la télémétrie réelle du firmware (Web Serial)
+    const L=this.state.live;
+    if(this.state.serialOn && L){
+      if(L.alt!=null)   out.alt=Math.round(L.alt);
+      if(L.temp!=null)  out.temp=L.temp.toFixed(1);
+      if(L.sats!=null)  out.sats=L.sats;
+      if(L.roll!=null)  out.roll=L.roll.toFixed(1);
+      if(L.pitch!=null) out.pitch=L.pitch.toFixed(1);
+      if(L.gpsFix!=null)out.gpsFix=L.gpsFix;
+      if(L.armed!=null) out.armed=L.armed;
+      if(L.speed!=null) out.speed=Math.round(L.speed);
+      if(L.lat!=null)   out.lat=L.lat.toFixed(5);
+      if(L.lon!=null)   out.lon=L.lon.toFixed(5);
+      if(L.boxMotion)   out.boxMotion=L.boxMotion;
+      out.source='Drone (USB · live)';
+    }
+    return out;
+  }
+
+  renderVals(){ return { app: React.createElement(MFApp, {c:this}) }; }
+}
+
+// ============== ICONS ==============
+function Icon(name, size, color){
+  size=size||22; color=color||'currentColor';
+  const s={width:size,height:size,fill:'none',stroke:color,strokeWidth:1.9,strokeLinecap:'round',strokeLinejoin:'round'};
+  const P=(d,k)=>React.createElement('path',{d:d,key:k});
+  const map={
+    pill:[P('M10.5 13.5l3-3','a'),P('M8.5 8.5l7 7a3.5 3.5 0 01-5 5l-2-2a3.5 3.5 0 010-5l5-5a3.5 3.5 0 015 5','b')],
+    blood:[P('M12 3s6 6.5 6 11a6 6 0 11-12 0c0-4.5 6-11 6-11z','a')],
+    vaccine:[P('M5 19l3-3','a'),P('M9 15l6-6','b'),P('M13 5l6 6','c'),P('M11 7l6 6','d')],
+    serum:[P('M9 3h6','a'),P('M10 3v4l-2 9a2 2 0 002 2h4a2 2 0 002-2l-2-9V3','b'),P('M8.4 13h7.2','c')],
+    shield:[P('M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z','a'),P('M9.5 12l1.8 1.8L15 10','b')],
+    kit:[React.createElement('rect',{x:3,y:7,width:18,height:13,rx:2,key:'r'}),P('M9 7V5a2 2 0 012-2h2a2 2 0 012 2v2','a'),P('M12 11v5M9.5 13.5h5','b')],
+    heart:[P('M12 20s-7-4.3-7-9a4 4 0 017-2.6A4 4 0 0119 11c0 4.7-7 9-7 9z','a')],
+    drone:[P('M7 7h10','a'),P('M5 7l-2-2M5 7l2-2','b'),P('M19 7l2-2M19 7l-2-2','c'),React.createElement('rect',{x:9,y:9,width:6,height:6,rx:1,key:'r'}),P('M9 15l-1 3h8l-1-3','d')],
+    search:[React.createElement('circle',{cx:11,cy:11,r:7,key:'c'}),P('M21 21l-4-4','a')],
+    cart:[React.createElement('circle',{cx:9,cy:20,r:1.4,key:'a'}),React.createElement('circle',{cx:18,cy:20,r:1.4,key:'b'}),P('M3 4h2l2.2 11.2a1 1 0 001 .8h8.6a1 1 0 001-.8L21 7H6','c')],
+    clock:[React.createElement('circle',{cx:12,cy:12,r:9,key:'c'}),P('M12 7v5l3 2','a')],
+    bolt:[P('M13 3L4 14h7l-1 7 9-11h-7z','a')],
+    check:[P('M5 12l4 4L19 7','a')],
+    pin:[P('M12 21s-7-6-7-11a7 7 0 1114 0c0 5-7 11-7 11z','a'),React.createElement('circle',{cx:12,cy:10,r:2.5,key:'c'})],
+    plus:[P('M12 5v14M5 12h14','a')],
+    user:[React.createElement('circle',{cx:12,cy:8,r:4,key:'c'}),P('M4 20a8 8 0 0116 0','a')],
+    box:[P('M21 8l-9-5-9 5 9 5 9-5z','a'),P('M3 8v8l9 5 9-5V8','b'),P('M12 13v8','c')],
+    battery:[React.createElement('rect',{x:3,y:8,width:16,height:9,rx:2,key:'r'}),P('M21 11v3','a'),React.createElement('rect',{x:5,y:10,width:8,height:5,rx:1,fill:color,stroke:'none',key:'f'})],
+    arrow:[P('M5 12h14M13 6l6 6-6 6','a')],
+    back:[P('M19 12H5M11 6l-6 6 6 6','a')],
+    chevron:[P('M9 6l6 6-6 6','a')],
+    eye:[P('M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z','a'),React.createElement('circle',{cx:12,cy:12,r:3,key:'c'})],
+    note:[React.createElement('rect',{x:4,y:3,width:16,height:18,rx:2,key:'r'}),P('M8 8h8M8 12h8M8 16h5','a')],
+    logout:[P('M15 4h3a2 2 0 012 2v12a2 2 0 01-2 2h-3','a'),P('M10 12h10M16 8l4 4-4 4','b')],
+    gauge:[P('M12 13l4-4','a'),React.createElement('circle',{cx:12,cy:13,r:1.6,fill:color,stroke:'none',key:'d'}),P('M4.5 17a9 9 0 1115 0','b')],
+    alt:[P('M3 19l5-9 4 6 3-4 6 7z','a')],
+    signal:[P('M4 18v-3M9 18v-7M14 18v-10M19 18v-13','a')],
+    filter:[P('M3 5h18l-7 8v6l-4-2v-4z','a')],
+    grid:[React.createElement('rect',{x:3,y:3,width:7,height:7,rx:1,key:'a'}),React.createElement('rect',{x:14,y:3,width:7,height:7,rx:1,key:'b'}),React.createElement('rect',{x:3,y:14,width:7,height:7,rx:1,key:'c'}),React.createElement('rect',{x:14,y:14,width:7,height:7,rx:1,key:'d'})],
+    list:[P('M8 6h13M8 12h13M8 18h13','a'),React.createElement('circle',{cx:3.5,cy:6,r:1.2,fill:color,stroke:'none',key:'1'}),React.createElement('circle',{cx:3.5,cy:12,r:1.2,fill:color,stroke:'none',key:'2'}),React.createElement('circle',{cx:3.5,cy:18,r:1.2,fill:color,stroke:'none',key:'3'})],
+    phone:[P('M5 4h4l2 5-3 2a12 12 0 005 5l2-3 5 2v4a2 2 0 01-2 2A16 16 0 013 6a2 2 0 012-2z','a')],
+    mail:[React.createElement('rect',{x:3,y:5,width:18,height:14,rx:2,key:'r'}),P('M3 7l9 6 9-6','a')],
+    lock:[React.createElement('rect',{x:5,y:11,width:14,height:9,rx:2,key:'r'}),P('M8 11V8a4 4 0 018 0v3','a')],
+    id:[React.createElement('rect',{x:3,y:5,width:18,height:14,rx:2,key:'r'}),React.createElement('circle',{cx:9,cy:11,r:2,key:'c'}),P('M6 16a3 3 0 016 0M15 10h3M15 13h3','a')],
+    building:[React.createElement('rect',{x:5,y:3,width:14,height:18,rx:1,key:'r'}),P('M9 7h2M13 7h2M9 11h2M13 11h2M9 15h2M13 15h2','a')],
+    camera:[React.createElement('rect',{x:3,y:7,width:18,height:13,rx:2,key:'r'}),P('M8 7l1.6-2.6h4.8L16 7','a'),React.createElement('circle',{cx:12,cy:13,r:3.4,key:'c'})],
+    thermo:[P('M14 14.8V5a2 2 0 10-4 0v9.8a4 4 0 104 0z','a')],
+    calendar:[React.createElement('rect',{x:3,y:5,width:18,height:16,rx:2,key:'r'}),P('M3 9h18M8 3v4M16 3v4','a')],
+    menu:[P('M4 6h16M4 12h16M4 18h16','a')],
+    down:[P('M12 5v13M6 12l6 6 6-6','a')],
+    up:[P('M12 19V6M6 12l6-6 6 6','a')],
+    expand:[P('M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5','a')],
+    close:[P('M6 6l12 12M18 6L6 18','a')],
+  };
+  return React.createElement('svg',Object.assign({viewBox:'0 0 24 24'},s), map[name]||[]);
+}
+
+// ============== APP ROOT ==============
+function MFApp(props){
+  const c=props.c, st=c.state;
+  let body;
+  if(st.screen==='login') body=React.createElement(LoginScreen,{c});
+  else if(st.screen==='signup') body=React.createElement(SignupScreen,{c});
+  else if(st.iface==='supplier') body=React.createElement(SupplierShell,{c});
+  else body=React.createElement(ClientShell,{c});
+  return React.createElement('div',{style:{minHeight:'100vh'}}, body, React.createElement(ProtoNav,{c}));
+}
+
+// ============== PROTO NAV ==============
+function ProtoNav(props){
+  const c=props.c, st=c.state;
+  const wrap={position:'fixed',left:18,bottom:18,zIndex:9999};
+  const card={background:'#fff',borderRadius:16,boxShadow:'0 12px 40px rgba(21,35,59,.18)',border:'1px solid #E2EAF2',width:214,overflow:'hidden'};
+  const head={display:'flex',alignItems:'center',justifyContent:'space-between',padding:'11px 14px',cursor:'pointer',background:'#15233B',color:'#fff'};
+  const seg=(a)=>({flex:1,textAlign:'center',padding:'7px 4px',fontSize:11.5,fontWeight:700,cursor:'pointer',borderRadius:9,color:a?'#fff':'#5A6B82',background:a?'#1E7FE5':'transparent'});
+  const item=(a,fn,label)=>React.createElement('div',{key:label,onClick:fn,style:{padding:'7px 14px',fontSize:12.5,fontWeight:a?700:500,color:a?'#1E7FE5':'#3A4A60',cursor:'pointer',background:a?'#EAF4FD':'transparent',borderRadius:8,margin:'2px 6px',display:'flex',alignItems:'center',gap:8}},React.createElement('span',{style:{width:5,height:5,borderRadius:'50%',background:a?'#1E7FE5':'#C5D3E2'}}),label);
+  if(!st.navOpen) return React.createElement('div',{style:wrap},
+    React.createElement('div',{onClick:()=>c.setState({navOpen:true}),style:{background:'#15233B',color:'#fff',borderRadius:12,padding:'10px 14px',fontSize:12.5,fontWeight:700,cursor:'pointer',boxShadow:'0 8px 24px rgba(21,35,59,.22)',display:'flex',alignItems:'center',gap:7}},Icon('drone',16,'#5BB0F5'),'Écrans'));
+  const clientScreens=[['login','Connexion'],['signup','Inscription'],['home','Accueil'],['product','Fiche produit'],['cart','Panier'],['checkout','Finalisation'],['confirm','Confirmation'],['tracking','Suivi'],['history','Historique'],['about','Découvrir MediFly']];
+  const supScreens=[['dashboard','Tableau de bord'],['order','Détail commande'],['flight','Données de vol'],['history','Historique']];
+  return React.createElement('div',{style:wrap},
+    React.createElement('div',{style:card},
+      React.createElement('div',{style:head,onClick:()=>c.setState({navOpen:false})},
+        React.createElement('span',{style:{fontSize:12.5,fontWeight:700,letterSpacing:.3}},'Prototype MediFly'),
+        React.createElement('span',{style:{fontSize:16,lineHeight:1,opacity:.7}},'×')),
+      React.createElement('div',{style:{display:'flex',gap:4,padding:8}},
+        React.createElement('div',{style:seg(st.iface==='client'),onClick:()=>c.setIface('client')},'Demandeur'),
+        React.createElement('div',{style:seg(st.iface==='supplier'),onClick:()=>c.setIface('supplier')},'Fournisseur')),
+      st.iface==='client'
+        ? React.createElement('div',{style:{paddingBottom:8,maxHeight:236,overflowY:'auto'}}, clientScreens.map(s=>item(st.screen===s[0],()=>c.go(s[0]),s[1])))
+        : React.createElement('div',{style:{paddingBottom:8}}, supScreens.map(s=>item(st.supScreen===s[0]&&st.screen!=='login',()=>{c.setState({iface:'supplier',screen:'dashboard'});c.goSup(s[0]);},s[1])))
+    )
+  );
+}
+
+// ============== LOGO ==============
+function Logo(props){ return React.createElement('img',{src:'assets/medifly-logo.png',alt:'MediFly',style:{height:props.h||30,width:'auto',display:'block'}}); }
+
+// ============== LOGIN ==============
+function LoginScreen(props){
+  const c=props.c;
+  const field={width:'100%',padding:'13px 15px 13px 44px',borderRadius:12,border:'1.5px solid #E2EAF2',fontSize:14.5,color:'#15233B',outline:'none',background:'#fff'};
+  const label={fontSize:12.5,fontWeight:700,color:'#3A4A60',marginBottom:7,display:'block'};
+  const iconWrap={position:'absolute',left:14,top:38,pointerEvents:'none'};
+  const enter=()=>{ const id=(c.state.loginId||'').toUpperCase(); if(id.includes('-F-')) c.setState({iface:'supplier',screen:'dashboard',supScreen:'dashboard'}); else c.setState({iface:'client',screen:'home'}); };
+  return React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1.05fr 1fr',minHeight:'100vh'}},
+    React.createElement('div',{style:{position:'relative',background:'linear-gradient(150deg,#1E7FE5 0%,#1565D8 60%,#0F4FB0 100%)',overflow:'hidden',display:'flex',flexDirection:'column',justifyContent:'space-between',padding:'48px 56px',color:'#fff'}},
+      React.createElement('div',{style:{position:'absolute',width:520,height:520,borderRadius:'50%',background:'rgba(255,255,255,.07)',top:-160,right:-140}}),
+      React.createElement('div',{style:{position:'absolute',width:300,height:300,borderRadius:'50%',background:'rgba(255,255,255,.06)',bottom:-90,left:-70}}),
+      React.createElement('div',{style:{position:'relative',zIndex:2,background:'#fff',borderRadius:14,padding:'10px 16px',display:'inline-flex',width:'fit-content',boxShadow:'0 8px 24px rgba(0,0,0,.12)'}},React.createElement(Logo,{h:44})),
+      React.createElement('div',{style:{position:'relative',zIndex:2}},
+        React.createElement('div',{style:{display:'inline-flex',alignItems:'center',gap:8,background:'rgba(255,255,255,.16)',padding:'7px 14px',borderRadius:30,fontSize:13,fontWeight:700,marginBottom:22}},Icon('drone',15,'#fff'),'Livraison médicale par drone · Maroc'),
+        React.createElement('h1',{style:{fontSize:42,lineHeight:1.1,fontWeight:800,letterSpacing:'-.5px',margin:'0 0 16px'}},'Quand vos médicaments volent vers vous.'),
+        React.createElement('p',{style:{fontSize:16,lineHeight:1.6,opacity:.92,maxWidth:430}},"Plateforme nationale de livraison de produits médicaux d'urgence pour les structures de santé.")),
+      React.createElement('div',{style:{position:'relative',zIndex:2,display:'flex',gap:26}},
+        [['< 2 min','Décollage'],['9 min','Livraison moy.'],['24/7','Disponible']].map((s,i)=>React.createElement('div',{key:i},React.createElement('div',{style:{fontSize:24,fontWeight:800}},s[0]),React.createElement('div',{style:{fontSize:12.5,opacity:.8,fontWeight:600}},s[1])))),
+      React.createElement('div',{style:{position:'absolute',right:46,top:'38%',zIndex:1,animation:'mffloat 4s ease-in-out infinite',opacity:.92}},Icon('drone',150,'rgba(255,255,255,.85)'))),
+    React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'center',padding:'40px',background:'#F7FBFF'}},
+      React.createElement('div',{style:{width:'100%',maxWidth:380,animation:'mfin .5s ease'}},
+        React.createElement('div',{style:{fontSize:13,fontWeight:700,color:'#1E7FE5',marginBottom:6}},'Espace structure'),
+        React.createElement('h2',{style:{fontSize:27,fontWeight:800,letterSpacing:'-.4px',marginBottom:6}},'Connexion'),
+        React.createElement('p',{style:{fontSize:14,color:'#5A6B82',marginBottom:26}},'Connectez-vous avec l’identifiant attribué à votre structure.'),
+        React.createElement('div',{style:{position:'relative',marginBottom:16}},
+          React.createElement('label',{style:label},'Identifiant de structure'),
+          React.createElement('span',{style:iconWrap},Icon('id',18,'#9CADC2')),
+          React.createElement('input',{style:field,value:c.state.loginId||'',onChange:e=>c.setState({loginId:e.target.value}),placeholder:'MF-D-00000'})),
+        React.createElement('div',{style:{position:'relative',marginBottom:14}},
+          React.createElement('label',{style:label},'Mot de passe'),
+          React.createElement('span',{style:iconWrap},Icon('lock',18,'#9CADC2')),
+          React.createElement('input',{type:'password',style:field,defaultValue:'••••••••'})),
+        React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18,fontSize:12.5}},
+          React.createElement('label',{style:{display:'flex',alignItems:'center',gap:7,color:'#3A4A60',fontWeight:600,cursor:'pointer'}},React.createElement('input',{type:'checkbox',defaultChecked:true}),'Rester connecté'),
+          React.createElement('a',{style:{color:'#1E7FE5',fontWeight:700,cursor:'pointer'}},'Mot de passe oublié ?')),
+        React.createElement('button',{onClick:enter,style:{width:'100%',padding:'14px',borderRadius:12,border:'none',background:'#1E7FE5',color:'#fff',fontSize:15,fontWeight:700,cursor:'pointer',boxShadow:'0 8px 22px rgba(30,127,229,.32)',display:'flex',alignItems:'center',justifyContent:'center',gap:8}},'Se connecter',Icon('arrow',18,'#fff')),
+        React.createElement('div',{style:{marginTop:14,display:'flex',gap:8,alignItems:'center'}},
+          React.createElement('span',{style:{fontSize:11.5,color:'#9CADC2',fontWeight:700}},'Démo :'),
+          React.createElement('button',{onClick:()=>c.setState({loginId:'MF-D-48217'}),style:{flex:1,border:'1.5px solid #E2EAF2',background:'#fff',color:'#1565D8',fontSize:11.5,fontWeight:700,padding:'7px',borderRadius:9,cursor:'pointer'}},'Demandeur'),
+          React.createElement('button',{onClick:()=>c.setState({loginId:'MF-F-90413'}),style:{flex:1,border:'1.5px solid #E2EAF2',background:'#fff',color:'#E08600',fontSize:11.5,fontWeight:700,padding:'7px',borderRadius:9,cursor:'pointer'}},'Fournisseur')),
+        React.createElement('div',{style:{textAlign:'center',marginTop:18,fontSize:13.5,color:'#5A6B82'}},'Nouvelle structure ? ',React.createElement('a',{onClick:()=>c.go('signup',{signupStep:1}),style:{color:'#1E7FE5',fontWeight:700,cursor:'pointer'}},'Créer un compte')),
+        React.createElement('div',{style:{marginTop:24,padding:'13px 16px',background:'#FDECEC',borderRadius:12,display:'flex',gap:11,alignItems:'center'}},
+          React.createElement('span',{style:{flexShrink:0,width:34,height:34,borderRadius:'50%',background:'#E5484D',display:'flex',alignItems:'center',justifyContent:'center'}},Icon('bolt',17,'#fff')),
+          React.createElement('div',{style:{fontSize:12.5,color:'#9B2C30',lineHeight:1.45}},React.createElement('b',null,'Urgence vitale ? '),'Composez le 141 (SAMU). MediFly complète les secours.')))
+    )
+  );
+}
+
+// ============== SIGNUP (questionnaire) ==============
+function SignupScreen(props){
+  const c=props.c, st=c.state;
+  const types=[
+    {t:'Hôpital',ic:'building',role:'client'},
+    {t:'CHU',ic:'building',role:'client'},
+    {t:'Pharmacie',ic:'pill',role:'client'},
+    {t:'Centre de vaccination',ic:'vaccine',role:'client'},
+    {t:'Dispensaire',ic:'heart',role:'client'},
+    {t:'Banque de sang',ic:'blood',role:'supplier'},
+    {t:'Grossiste',ic:'box',role:'supplier'},
+  ];
+  const field={width:'100%',padding:'13px 15px 13px 44px',borderRadius:12,border:'1.5px solid #E2EAF2',fontSize:14.5,color:'#15233B',outline:'none',background:'#fff'};
+  const label={fontSize:12.5,fontWeight:700,color:'#3A4A60',marginBottom:7,display:'block'};
+  const iconWrap={position:'absolute',left:14,top:38,pointerEvents:'none'};
+  const field2=(lbl,ic,val,full,type)=>React.createElement('div',{style:{position:'relative',gridColumn:full?'1 / -1':'auto'}},React.createElement('label',{style:label},lbl),React.createElement('span',{style:iconWrap},Icon(ic,18,'#9CADC2')),React.createElement('input',{type:type||'text',style:field,defaultValue:val}));
+  const role=(types.find(x=>x.t===st.structureType)||{}).role||'client';
+  const finish=()=>{ const id=(role==='supplier'?'MF-F-':'MF-D-')+(40000+Math.floor(Math.random()*9000)); c.setState({signupId:id, signupStep:3}); };
+  if(st.signupStep===3) return React.createElement('div',{style:{minHeight:'100vh',display:'flex',flexDirection:'column',background:'#F7FBFF'}},
+    React.createElement('div',{style:{padding:'20px 32px',display:'flex',alignItems:'center',justifyContent:'space-between',borderBottom:'1px solid #EAF0F7',background:'#fff'}},
+      React.createElement('div',{onClick:()=>c.go('login'),style:{cursor:'pointer'}},React.createElement(Logo,{h:42}))),
+    React.createElement('div',{style:{flex:1,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 24px'}},
+      React.createElement('div',{style:{width:'100%',maxWidth:500,textAlign:'center',animation:'mfin .5s ease'}},
+        React.createElement('div',{style:{width:90,height:90,borderRadius:'50%',background:'#E2F0DD',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 22px'}},Icon('check',46,'#1FA97A')),
+        React.createElement('h1',{style:{fontSize:29,fontWeight:800,letterSpacing:'-.5px',marginBottom:10}},'Compte créé !'),
+        React.createElement('p',{style:{fontSize:15,color:'#5A6B82',lineHeight:1.6,marginBottom:24,maxWidth:420,marginLeft:'auto',marginRight:'auto'}},'Votre structure est enregistrée. Conservez cet identifiant : il vous servira, avec votre mot de passe, à vous connecter.'),
+        React.createElement('div',{style:{background:'#fff',border:'1.5px solid #CDE3FA',borderRadius:16,padding:'22px 24px',marginBottom:22,boxShadow:'0 8px 24px rgba(30,127,229,.10)'}},
+          React.createElement('div',{style:{fontSize:11.5,fontWeight:700,color:'#9CADC2',textTransform:'uppercase',letterSpacing:.6,marginBottom:10}},'Votre identifiant de connexion'),
+          React.createElement('div',{style:{fontSize:30,fontWeight:800,letterSpacing:'2px',color:'#1565D8',fontFamily:'monospace'}},st.signupId)),
+        React.createElement('button',{onClick:()=>c.go('login',{loginId:st.signupId}),style:{border:'none',background:'#1E7FE5',color:'#fff',padding:'14px 28px',borderRadius:13,fontSize:15,fontWeight:700,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:8,boxShadow:'0 8px 22px rgba(30,127,229,.3)'}},'Se connecter',Icon('arrow',18,'#fff'))))
+  );
+  return React.createElement('div',{style:{minHeight:'100vh',display:'flex',flexDirection:'column',background:'#F7FBFF'}},
+    React.createElement('div',{style:{padding:'20px 32px',display:'flex',alignItems:'center',justifyContent:'space-between',borderBottom:'1px solid #EAF0F7',background:'#fff'}},
+      React.createElement('div',{onClick:()=>c.go('login'),style:{cursor:'pointer'}},React.createElement(Logo,{h:42})),
+      React.createElement('a',{onClick:()=>c.go('login'),style:{fontSize:13.5,fontWeight:700,color:'#5A6B82',cursor:'pointer',display:'flex',alignItems:'center',gap:7}},Icon('back',16,'#5A6B82'),'Déjà un compte ? Se connecter')),
+    React.createElement('div',{style:{flex:1,display:'flex',alignItems:'flex-start',justifyContent:'center',padding:'40px 24px'}},
+      React.createElement('div',{style:{width:'100%',maxWidth:640,animation:'mfin .4s ease'}},
+        // stepper
+        React.createElement('div',{style:{display:'flex',alignItems:'center',gap:12,marginBottom:26}},
+          [['1','Type de structure'],['2','Informations']].map((s,i)=>{const done=st.signupStep>i+1,cur=st.signupStep===i+1;return React.createElement('div',{key:i,style:{display:'flex',alignItems:'center',gap:12,flex:1}},
+            React.createElement('span',{style:{width:30,height:30,borderRadius:'50%',flexShrink:0,background:(done||cur)?'#1E7FE5':'#E7EEF6',color:(done||cur)?'#fff':'#9CADC2',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:800,fontSize:13.5}},done?Icon('check',15,'#fff'):s[0]),
+            React.createElement('span',{style:{fontSize:13.5,fontWeight:700,color:cur?'#15233B':'#9CADC2'}},s[1]),
+            i===0&&React.createElement('span',{style:{flex:1,height:2,background:st.signupStep>1?'#1E7FE5':'#E7EEF6'}}));})),
+        st.signupStep===1
+        ? React.createElement('div',null,
+            React.createElement('h2',{style:{fontSize:26,fontWeight:800,letterSpacing:'-.4px',marginBottom:6}},'Quelle est votre structure ?'),
+            React.createElement('p',{style:{fontSize:14.5,color:'#5A6B82',marginBottom:24}},'Votre espace est adapté au type d’établissement.'),
+            React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12,marginBottom:28}},
+              types.map(ty=>{const a=st.structureType===ty.t;return React.createElement('div',{key:ty.t,onClick:()=>c.setState({structureType:ty.t}),style:{border:'1.5px solid '+(a?'#1E7FE5':'#E2EAF2'),background:a?'#EAF4FD':'#fff',borderRadius:14,padding:'18px 14px',cursor:'pointer',display:'flex',flexDirection:'column',gap:10,position:'relative'}},
+                React.createElement('span',{style:{width:44,height:44,borderRadius:12,background:a?'#1E7FE5':'#F2F8FE',display:'flex',alignItems:'center',justifyContent:'center'}},Icon(ty.ic,23,a?'#fff':'#1565D8')),
+                React.createElement('span',{style:{fontSize:14,fontWeight:700,lineHeight:1.25}},ty.t),
+                a&&React.createElement('span',{style:{position:'absolute',top:12,right:12,width:18,height:18,borderRadius:'50%',background:'#1E7FE5',display:'flex',alignItems:'center',justifyContent:'center'}},Icon('check',11,'#fff')));})),
+            React.createElement('button',{onClick:()=>c.setState({signupStep:2}),style:{width:'100%',padding:'14px',borderRadius:12,border:'none',background:'#1E7FE5',color:'#fff',fontSize:15,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8}},'Continuer',Icon('arrow',18,'#fff')))
+        : React.createElement('div',null,
+            React.createElement('h2',{style:{fontSize:26,fontWeight:800,letterSpacing:'-.4px',marginBottom:6}},'Informations de la structure'),
+            React.createElement('p',{style:{fontSize:14.5,color:'#5A6B82',marginBottom:8}},'Type sélectionné : ',React.createElement('b',{style:{color:'#1565D8'}},st.structureType)),
+            React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:18,padding:24,marginBottom:18}},
+              React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}},
+                field2('Raison sociale','building','CHU Ibn Rochd',true),
+                field2('Numéro de téléphone','phone','+212 6 12 34 56 78'),
+                field2('Adresse e-mail','mail','contact@chu-ibnrochd.ma','','email'),
+                role==='client'&&field2('Numéro INPE','id','INPE-014725',true),
+                field2('Mot de passe','lock','••••••••','','password'),
+                field2('Confirmation du mot de passe','lock','••••••••','','password'))),
+            React.createElement('div',{style:{display:'flex',gap:12}},
+              React.createElement('button',{onClick:()=>c.setState({signupStep:1}),style:{padding:'14px 22px',borderRadius:12,border:'1.5px solid #E2EAF2',background:'#fff',color:'#3A4A60',fontSize:14.5,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',gap:8}},Icon('back',17,'#3A4A60'),'Retour'),
+              React.createElement('button',{onClick:finish,style:{flex:1,padding:'14px',borderRadius:12,border:'none',background:'#1E7FE5',color:'#fff',fontSize:15,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8,boxShadow:'0 8px 22px rgba(30,127,229,.3)'}},'Créer mon compte',Icon('check',18,'#fff'))),
+            React.createElement('p',{style:{textAlign:'center',fontSize:12,color:'#9CADC2',marginTop:14}},'En créant un compte, vous acceptez la charte de conformité médicale MediFly.'))
+      ))
+  );
+}
+
+
+// ============== CLIENT HEADER ==============
+function Header(props){
+  const c=props.c, st=c.state;
+  const navItem=(s,label)=>React.createElement('a',{key:s,onClick:()=>c.go(s),style:{fontSize:14,fontWeight:st.screen===s?700:600,color:st.screen===s?'#1E7FE5':'#3A4A60',cursor:'pointer'}},label);
+  return React.createElement('div',{style:{position:'sticky',top:0,zIndex:100,background:'#fff',borderBottom:'1px solid #EAF0F7'}},
+    React.createElement('div',{style:{background:'#15233B',color:'#cdd8e6',fontSize:12.5}},
+      React.createElement('div',{style:{maxWidth:1200,margin:'0 auto',padding:'7px 24px',display:'flex',justifyContent:'space-between',alignItems:'center'}},
+        React.createElement('span',{style:{display:'flex',alignItems:'center',gap:8}},Icon('clock',14,'#5BB0F5'),'Centre de vol opérationnel · 24h/24 et 7j/7'),
+        React.createElement('span',{style:{display:'flex',alignItems:'center',gap:8}},Icon('pin',14,'#5BB0F5'),'Zone : Grand Casablanca'))),
+    React.createElement('div',{style:{maxWidth:1200,margin:'0 auto',padding:'14px 24px',display:'flex',alignItems:'center',gap:24}},
+      React.createElement('div',{style:{cursor:'pointer'},onClick:()=>c.go('home')},React.createElement(Logo,{h:58})),
+      React.createElement('div',{style:{flex:1,display:'flex',alignItems:'center',background:'#F2F8FE',border:'1.5px solid #E2EAF2',borderRadius:12,overflow:'hidden',maxWidth:520}},
+        React.createElement('span',{style:{paddingLeft:14,display:'flex'}},Icon('search',19,'#9CADC2')),
+        React.createElement('input',{value:st.query||'',onChange:e=>c.setState({query:e.target.value}),placeholder:'Rechercher un produit médical…',style:{flex:1,border:'none',background:'transparent',padding:'0 14px',height:44,fontSize:14,outline:'none',color:'#15233B'}}),
+        React.createElement('button',{onClick:()=>c.go('home'),style:{border:'none',background:'#1E7FE5',width:48,height:44,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer'}},Icon('arrow',19,'#fff'))),
+      React.createElement('nav',{style:{display:'flex',gap:22,alignItems:'center'}},navItem('home','Catalogue'),navItem('history','Mes commandes'),React.createElement(DiscoverButton,{c})),
+      React.createElement('div',{style:{display:'flex',alignItems:'center',gap:12}},
+        React.createElement('button',{onClick:()=>c.go('cart'),style:{position:'relative',border:'1.5px solid #E2EAF2',background:'#fff',width:44,height:44,borderRadius:12,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer'}},
+          Icon('cart',20,'#15233B'),
+          c.cartCount()>0&&React.createElement('span',{style:{position:'absolute',top:-6,right:-6,background:'#E5484D',color:'#fff',fontSize:11,fontWeight:800,minWidth:19,height:19,borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 5px'}},c.cartCount())),
+        React.createElement('div',{title:'Compte',style:{width:40,height:40,borderRadius:'50%',background:'#EAF4FD',display:'flex',alignItems:'center',justifyContent:'center'}},Icon('user',20,'#1E7FE5')),
+        React.createElement('button',{onClick:()=>c.go('login'),title:'Déconnexion',style:{border:'1.5px solid #E2EAF2',background:'#fff',width:40,height:40,borderRadius:12,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer'}},Icon('logout',19,'#5A6B82'))))
+  );
+}
+
+// ============== CLIENT FOOTER ==============
+function Footer(props){
+  const col=(title,items)=>React.createElement('div',null,React.createElement('div',{style:{fontSize:13,fontWeight:800,marginBottom:14,color:'#fff'}},title),items.map((t,i)=>React.createElement('div',{key:i,style:{fontSize:13.5,color:'#9DB0C6',marginBottom:10,cursor:'pointer'}},t)));
+  return React.createElement('footer',{style:{background:'#15233B',marginTop:60}},
+    React.createElement('div',{style:{maxWidth:1200,margin:'0 auto',padding:'48px 24px',display:'grid',gridTemplateColumns:'1.6fr 1fr 1fr 1fr',gap:40}},
+      React.createElement('div',null,
+        React.createElement('div',{style:{background:'#fff',borderRadius:12,padding:'8px 13px',display:'inline-flex',marginBottom:16}},React.createElement(Logo,{h:26})),
+        React.createElement('p',{style:{fontSize:13.5,color:'#9DB0C6',lineHeight:1.6,maxWidth:300}},'Livraison de produits médicaux d’urgence par drone au Maroc. Quand vos médicaments volent vers vous.')),
+      col('Plateforme',['Catalogue','Suivi de vol','Couverture réseau','Disponibilité']),
+      col('Structures',['Devenir partenaire','Numéro INPE','Conformité','Support 24/7']),
+      col('Légal',['Certification médicale','Confidentialité','CGU','Traçabilité'])),
+    React.createElement('div',{style:{borderTop:'1px solid #243650'}},
+      React.createElement('div',{style:{maxWidth:1200,margin:'0 auto',padding:'16px 24px',display:'flex',justifyContent:'space-between',fontSize:12.5,color:'#7E92AB'}},
+        React.createElement('span',null,'© 2026 MediFly Maroc. Dispositif complémentaire aux secours.'),
+        React.createElement('span',null,'Urgence vitale : 141 (SAMU)')))
+  );
+}
+
+// ============== CLIENT SHELL ==============
+function ClientShell(props){
+  const c=props.c, st=c.state;
+  let view;
+  if(st.screen==='product') view=React.createElement(ProductScreen,{c});
+  else if(st.screen==='cart') view=React.createElement(CartScreen,{c});
+  else if(st.screen==='checkout') view=React.createElement(CheckoutScreen,{c});
+  else if(st.screen==='confirm') view=React.createElement(ConfirmScreen,{c});
+  else if(st.screen==='tracking') view=React.createElement(TrackingScreen,{c});
+  else if(st.screen==='history') view=React.createElement(HistoryScreen,{c});
+  else if(st.screen==='about') view=React.createElement(AboutScreen,{c});
+  else view=React.createElement(HomeScreen,{c});
+  return React.createElement('div',null, st.screen==='about'?React.createElement(AboutHeader,{c}):React.createElement(Header,{c}), React.createElement('div',{style:{minHeight:'60vh'}},view), React.createElement(Footer,{c}));
+}
+
+// ============== PRODUCT CARD (hover + qty) ==============
+class ProductCard extends React.Component {
+  constructor(p){ super(p); this.state={hover:false}; }
+  render(){
+    const c=this.props.c, p=this.props.p, hov=this.state.hover;
+    const qty=p.requiresOptions?0:c.qtyInCart(p.id);
+    return React.createElement('div',{onMouseEnter:()=>this.setState({hover:true}),onMouseLeave:()=>this.setState({hover:false}),
+      style:{background:'#fff',borderRadius:16,border:'1px solid '+(hov?'#CDE3FA':'#EAF0F7'),overflow:'hidden',transition:'.18s',boxShadow:hov?'0 14px 34px rgba(21,35,59,.12)':'0 1px 2px rgba(21,35,59,.04)',transform:hov?'translateY(-3px)':'none'}},
+      React.createElement('div',{style:{position:'relative',height:158,background:p.tint,display:'flex',alignItems:'center',justifyContent:'center'}},
+        p.urgent&&React.createElement('span',{style:{position:'absolute',top:12,left:12,background:'#E5484D',color:'#fff',fontSize:10.5,fontWeight:800,padding:'4px 9px',borderRadius:20,display:'flex',alignItems:'center',gap:4}},Icon('bolt',11,'#fff'),'URGENT'),
+        React.createElement('img',{src:p.img,alt:p.name,loading:'lazy',style:{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'cover'}}),
+        // hover: voir description
+        React.createElement('button',{onClick:()=>c.go('product',{activeProduct:p}),style:{position:'absolute',bottom:12,left:'50%',transform:'translateX(-50%)',opacity:hov?1:0,transition:'.18s',border:'none',background:'#15233B',color:'#fff',fontSize:12,fontWeight:700,padding:'7px 14px',borderRadius:20,cursor:'pointer',display:'flex',alignItems:'center',gap:6,whiteSpace:'nowrap',boxShadow:'0 6px 16px rgba(21,35,59,.25)'}},Icon('eye',14,'#fff'),'Voir la description')),
+      React.createElement('div',{style:{padding:'14px 15px 16px'}},
+        React.createElement('div',{style:{fontSize:11,fontWeight:700,color:'#9CADC2',marginBottom:5,textTransform:'uppercase',letterSpacing:.4}},p.catName),
+        React.createElement('div',{onClick:()=>c.go('product',{activeProduct:p}),style:{fontSize:15,fontWeight:700,marginBottom:14,lineHeight:1.25,cursor:'pointer',minHeight:38}},p.name),
+        p.requiresOptions
+          ? React.createElement('button',{onClick:()=>c.go('product',{activeProduct:p}),style:{width:'100%',border:'1.5px solid #1E7FE5',background:'#fff',color:'#1565D8',borderRadius:11,padding:'11px',fontSize:13,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:7}},Icon('blood',16,'#1565D8'),'Choisir le groupe')
+          : (qty>0
+              ? React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',border:'1.5px solid #1E7FE5',borderRadius:11,overflow:'hidden'}},
+                  React.createElement('button',{onClick:()=>c.setQtyKey(c.keyOf(p.id),-1),style:{border:'none',background:'#EAF4FD',width:42,height:42,fontSize:20,cursor:'pointer',color:'#1565D8',fontWeight:700}},'−'),
+                  React.createElement('span',{style:{fontWeight:800,fontSize:15,color:'#1565D8'}},qty+' au panier'),
+                  React.createElement('button',{onClick:()=>c.addToCart(p),style:{border:'none',background:'#EAF4FD',width:42,height:42,fontSize:20,cursor:'pointer',color:'#1565D8',fontWeight:700}},'+'))
+              : React.createElement('button',{onClick:()=>c.addToCart(p),style:{width:'100%',border:'none',background:'#1E7FE5',color:'#fff',borderRadius:11,padding:'11px',fontSize:13.5,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:7}},Icon('plus',16,'#fff'),'Ajouter au panier')))
+    );
+  }
+}
+
+// ============== HERO CAROUSEL ==============
+function HeroCarousel(props){
+  const c=props.c, idx=c.state.bannerIdx||0;
+  const slides=[
+    {badge:'Catalogue médical complet', title:'Médicaments et fournitures, à portée de clic', sub:'Comprimés, antiseptiques et soins essentiels : commandez tout votre stock d’urgence depuis le catalogue.', bg:'assets/banners/banner1.jpg'},
+    {badge:'Livraison en urgence vitale', title:'De la commande au chevet, en quelques minutes', sub:'Quand chaque seconde compte, nos drones relient les hôpitaux du Grand Casablanca à pleine vitesse.', bg:'assets/banners/banner2.jpg'},
+    {badge:'Matériel & dispositifs médicaux', title:'Tout l’équipement de soin, prêt à l’emploi', sub:'Stéthoscopes, seringues, kits stériles et instruments certifiés, déposés directement sur votre toit.', bg:'assets/banners/banner3.jpg'},
+  ];
+  const go=(i)=>c.setState({bannerIdx:(i+slides.length)%slides.length});
+  return React.createElement('div',{style:{background:'linear-gradient(120deg,#EAF4FD 0%,#D9ECFC 100%)',position:'relative',overflow:'hidden'}},
+    React.createElement('div',{style:{position:'absolute',right:-50,top:-40,width:320,height:320,borderRadius:'50%',background:'rgba(91,176,245,.18)',zIndex:0}}),
+    React.createElement('div',{style:{display:'flex',width:'100%',transform:'translateX(-'+(idx*100)+'%)',transition:'transform .7s cubic-bezier(.4,0,.2,1)',position:'relative',zIndex:1}},
+      slides.map((s,i)=>React.createElement('div',{key:i,style:{flex:'0 0 100%',position:'relative',overflow:'hidden'}},
+        React.createElement('div',{style:{position:'absolute',inset:0,backgroundImage:'url("'+s.bg+'")',backgroundSize:'cover',backgroundPosition:'center',zIndex:0}}),
+        React.createElement('div',{style:{position:'absolute',inset:0,background:'linear-gradient(90deg, rgba(237,244,253,.96) 0%, rgba(237,244,253,.86) 40%, rgba(237,244,253,.40) 68%, rgba(237,244,253,.05) 100%)',zIndex:0}}),
+        React.createElement('div',{style:{position:'relative',zIndex:1,maxWidth:1200,margin:'0 auto',padding:'42px 24px 60px',minHeight:236,boxSizing:'border-box'}},
+          React.createElement('div',{style:{display:'inline-flex',alignItems:'center',gap:8,background:'#fff',padding:'7px 14px',borderRadius:30,fontSize:12.5,fontWeight:700,color:'#1565D8',marginBottom:16,boxShadow:'0 4px 14px rgba(30,127,229,.12)'}},Icon('bolt',15,'#E5484D'),s.badge),
+          React.createElement('h1',{style:{fontSize:38,lineHeight:1.1,fontWeight:800,letterSpacing:'-.8px',marginBottom:12,color:'#15233B',maxWidth:620}},s.title),
+          React.createElement('p',{style:{fontSize:15.5,color:'#4A5C73',lineHeight:1.6,maxWidth:480}},s.sub))))),
+    React.createElement('div',{style:{position:'absolute',bottom:20,left:0,right:0,display:'flex',justifyContent:'center',gap:8,zIndex:2}},
+      slides.map((s,i)=>React.createElement('span',{key:i,onClick:()=>go(i),style:{width:i===idx?26:9,height:9,borderRadius:9,background:i===idx?'#1E7FE5':'rgba(21,35,59,.22)',cursor:'pointer',transition:'.3s'}})))
+  );
+}
+
+// ============== HOME (catalogue) ==============
+function HomeScreen(props){
+  const c=props.c, st=c.state;
+  const cats=[{id:'all',name:'Tous',icon:'grid'}].concat(c.cats());
+  const chip=(a)=>({padding:'9px 16px',borderRadius:30,fontSize:13.5,fontWeight:700,cursor:'pointer',border:'1.5px solid '+(a?'#1E7FE5':'#E2EAF2'),background:a?'#1E7FE5':'#fff',color:a?'#fff':'#3A4A60',whiteSpace:'nowrap',display:'flex',alignItems:'center',gap:7});
+  const vis=c.visibleProducts();
+  return React.createElement('div',null,
+    React.createElement(HeroCarousel,{c}),
+    // catalog
+    React.createElement('div',{style:{maxWidth:1200,margin:'0 auto',padding:'26px 24px'}},
+      React.createElement('div',{style:{display:'flex',gap:10,flexWrap:'wrap',marginBottom:18,alignItems:'center'}},
+        React.createElement('span',{style:{display:'flex',alignItems:'center',gap:7,fontSize:13,fontWeight:700,color:'#5A6B82',marginRight:4}},Icon('filter',16,'#5A6B82'),'Filtrer :'),
+        cats.map(cat=>React.createElement('div',{key:cat.id,style:chip(st.cat===cat.id),onClick:()=>c.setState({cat:cat.id})},Icon(cat.icon,15,st.cat===cat.id?'#fff':'#9CADC2'),cat.name))),
+      React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18}},
+        React.createElement('h2',{style:{fontSize:20,fontWeight:800}},vis.length+' produits disponibles'),
+        st.query&&React.createElement('span',{style:{fontSize:13,color:'#5A6B82'}},'Recherche : « '+st.query+' »')),
+      vis.length===0
+        ? React.createElement('div',{style:{textAlign:'center',padding:'70px',color:'#9CADC2',fontSize:15}},'Aucun produit ne correspond à votre recherche.')
+        : React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:18}}, vis.map(p=>React.createElement(ProductCard,{key:p.id,c,p}))))
+  );
+}
+
+// ============== PRODUCT (description + blood type) ==============
+function ProductScreen(props){
+  const c=props.c, p=c.state.activeProduct||c.products()[0];
+  const sel=c.state.bloodSel||null;
+  const canAdd=!p.requiresOptions||sel;
+  const add=()=>{ if(!canAdd) return; c.addToCart(p, p.requiresOptions?sel:null); c.go('cart'); };
+  return React.createElement('div',{style:{maxWidth:1080,margin:'0 auto',padding:'30px 24px'}},
+    React.createElement('a',{onClick:()=>c.go('home'),style:{display:'inline-flex',alignItems:'center',gap:7,fontSize:13.5,fontWeight:700,color:'#5A6B82',cursor:'pointer',marginBottom:22}},Icon('back',16,'#5A6B82'),'Retour au catalogue'),
+    React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:44,alignItems:'start'}},
+      React.createElement('div',{style:{background:p.tint,borderRadius:22,height:400,overflow:'hidden',position:'relative'}},
+        p.urgent&&React.createElement('span',{style:{position:'absolute',top:18,left:18,zIndex:2,background:'#E5484D',color:'#fff',fontSize:12,fontWeight:800,padding:'6px 13px',borderRadius:20,display:'flex',alignItems:'center',gap:5}},Icon('bolt',13,'#fff'),'URGENT'),
+        React.createElement('img',{src:p.img,alt:p.name,style:{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'cover'}})),
+      React.createElement('div',null,
+        React.createElement('div',{style:{fontSize:12.5,fontWeight:700,color:'#1E7FE5',textTransform:'uppercase',letterSpacing:.5,marginBottom:9}},p.catName),
+        React.createElement('h1',{style:{fontSize:31,fontWeight:800,letterSpacing:'-.5px',marginBottom:14}},p.name),
+        React.createElement('p',{style:{fontSize:15.5,color:'#4A5C73',lineHeight:1.65,marginBottom:22}},p.desc),
+        p.requiresOptions&&React.createElement('div',{style:{marginBottom:22}},
+          React.createElement('div',{style:{fontSize:13.5,fontWeight:800,marginBottom:10,display:'flex',alignItems:'center',gap:7}},Icon('blood',17,'#E5484D'),p.optionLabel,React.createElement('span',{style:{fontSize:11.5,fontWeight:700,color:'#E5484D',background:'#FDECEC',padding:'2px 8px',borderRadius:20}},'Obligatoire')),
+          React.createElement('div',{style:{display:'flex',gap:9,flexWrap:'wrap'}}, p.options.map(o=>{const a=sel===o;return React.createElement('button',{key:o,onClick:()=>c.setState({bloodSel:o}),style:{minWidth:56,padding:'12px 14px',borderRadius:12,border:'1.5px solid '+(a?'#E5484D':'#E2EAF2'),background:a?'#E5484D':'#fff',color:a?'#fff':'#15233B',fontSize:15,fontWeight:800,cursor:'pointer'}},o);}))),
+        React.createElement('div',{style:{display:'flex',gap:12}},
+          React.createElement('button',{onClick:add,disabled:!canAdd,style:{flex:1,border:'none',background:canAdd?'#1E7FE5':'#C7D5E5',color:'#fff',padding:'15px',borderRadius:13,fontSize:15,fontWeight:700,cursor:canAdd?'pointer':'not-allowed',display:'flex',alignItems:'center',justifyContent:'center',gap:8,boxShadow:canAdd?'0 8px 22px rgba(30,127,229,.3)':'none'}},Icon('cart',18,'#fff'),p.requiresOptions&&!sel?'Sélectionnez un groupe':'Ajouter au panier')),
+        React.createElement('div',{style:{marginTop:22,padding:'14px 16px',background:'#EAF4FD',borderRadius:13,display:'flex',gap:11,alignItems:'center',fontSize:13,color:'#1565D8',fontWeight:600}},Icon('shield',20,'#1E7FE5'),'Transport en chaîne du froid certifié et traçabilité complète du colis.'))
+    )
+  );
+}
+
+// ============== CART ==============
+function CartScreen(props){
+  const c=props.c, cart=c.state.cart;
+  if(cart.length===0) return React.createElement('div',{style:{maxWidth:600,margin:'0 auto',padding:'80px 24px',textAlign:'center'}},
+    React.createElement('div',{style:{width:90,height:90,borderRadius:'50%',background:'#EAF4FD',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 22px'}},Icon('cart',42,'#1E7FE5')),
+    React.createElement('h2',{style:{fontSize:25,fontWeight:800,marginBottom:10}},'Votre panier est vide'),
+    React.createElement('p',{style:{fontSize:15,color:'#5A6B82',marginBottom:26}},'Ajoutez les produits médicaux à faire livrer.'),
+    React.createElement('button',{onClick:()=>c.go('home'),style:{border:'none',background:'#1E7FE5',color:'#fff',padding:'13px 26px',borderRadius:12,fontSize:14.5,fontWeight:700,cursor:'pointer'}},'Parcourir le catalogue'));
+  return React.createElement('div',{style:{maxWidth:1100,margin:'0 auto',padding:'34px 24px'}},
+    React.createElement('h1',{style:{fontSize:32,fontWeight:800,letterSpacing:'-.5px',marginBottom:4}},'Votre panier'),
+    React.createElement('p',{style:{fontSize:14.5,color:'#5A6B82',marginBottom:24}},'Modifiez les quantités avant de passer commande.'),
+    React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1.6fr 1fr',gap:28,alignItems:'start'}},
+      React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:14}},
+        cart.map(i=>React.createElement('div',{key:i.key,style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:16,padding:14,display:'flex',gap:16,alignItems:'center'}},
+          React.createElement('div',{style:{width:78,height:78,borderRadius:13,background:i.tint,overflow:'hidden',flexShrink:0}},React.createElement('img',{src:i.img,alt:i.name,style:{width:'100%',height:'100%',objectFit:'cover'}})),
+          React.createElement('div',{style:{flex:1}},
+            React.createElement('div',{style:{fontSize:15,fontWeight:700,marginBottom:4}},i.name, i.opt&&React.createElement('span',{style:{marginLeft:8,fontSize:12,fontWeight:800,color:'#E5484D',background:'#FDECEC',padding:'2px 8px',borderRadius:20}},i.opt)),
+            React.createElement('div',{style:{fontSize:12.5,color:'#5A6B82',display:'flex',gap:6,alignItems:'center'}},Icon('clock',13,'#9CADC2'),'Livraison ~'+i.eta+' min')),
+          React.createElement('div',{style:{display:'flex',alignItems:'center',border:'1.5px solid #E2EAF2',borderRadius:10,overflow:'hidden'}},
+            React.createElement('button',{onClick:()=>c.setQtyKey(i.key,-1),style:{border:'none',background:'#F2F8FE',width:34,height:34,fontSize:18,cursor:'pointer',color:'#1565D8'}},'−'),
+            React.createElement('span',{style:{width:34,textAlign:'center',fontWeight:700,fontSize:14}},i.qty),
+            React.createElement('button',{onClick:()=>c.setQtyKey(i.key,1),style:{border:'none',background:'#F2F8FE',width:34,height:34,fontSize:18,cursor:'pointer',color:'#1565D8'}},'+'))))),
+      React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:18,padding:24,position:'sticky',top:120}},
+        React.createElement('h3',{style:{fontSize:18,fontWeight:800,marginBottom:18}},'Récapitulatif'),
+        React.createElement('div',{style:{display:'flex',justifyContent:'space-between',fontSize:14,color:'#4A5C73',marginBottom:11}},React.createElement('span',null,'Articles'),React.createElement('span',{style:{fontWeight:700,color:'#15233B'}},c.cartCount())),
+        React.createElement('div',{style:{display:'flex',justifyContent:'space-between',fontSize:14,color:'#4A5C73',marginBottom:11}},React.createElement('span',null,'Mode de livraison'),React.createElement('span',{style:{fontWeight:700,color:'#15233B'}},'Drone express')),
+        React.createElement('div',{style:{borderTop:'1px dashed #E2EAF2',margin:'14px 0'}}),
+        React.createElement('div',{style:{background:'#FDECEC',borderRadius:12,padding:'12px 14px',display:'flex',gap:10,alignItems:'center',marginBottom:18}},
+          React.createElement('span',{style:{width:34,height:34,borderRadius:'50%',background:'#E5484D',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}},Icon('clock',17,'#fff')),
+          React.createElement('div',null,React.createElement('div',{style:{fontSize:12,color:'#9B2C30',fontWeight:600}},'Livraison estimée'),React.createElement('div',{style:{fontSize:16,fontWeight:800,color:'#9B2C30'}},'~ '+c.fastEta()+' minutes'))),
+        React.createElement('button',{onClick:()=>c.go('checkout'),style:{width:'100%',border:'none',background:'#1E7FE5',color:'#fff',padding:'15px',borderRadius:13,fontSize:15,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8,boxShadow:'0 8px 22px rgba(30,127,229,.3)'}},'Passer la commande',Icon('arrow',18,'#fff')),
+        React.createElement('button',{onClick:()=>c.go('home'),style:{width:'100%',border:'none',background:'transparent',color:'#5A6B82',padding:'12px',fontSize:13.5,fontWeight:700,cursor:'pointer',marginTop:6}},'Continuer mes achats'))
+    )
+  );
+}
+
+function SummaryRow(props){return React.createElement('div',{style:{display:'flex',justifyContent:'space-between',fontSize:14,color:'#4A5C73',marginBottom:11}},React.createElement('span',null,props.l),React.createElement('span',{style:{fontWeight:700,color:'#15233B'}},props.v));}
+
+// ============== CHECKOUT (with note) ==============
+function CheckoutScreen(props){
+  const c=props.c, st=c.state;
+  const field={width:'100%',padding:'12px 14px',borderRadius:11,border:'1.5px solid #E2EAF2',fontSize:14,color:'#15233B',outline:'none',background:'#fff'};
+  const label={fontSize:12.5,fontWeight:700,color:'#3A4A60',marginBottom:6,display:'block'};
+  const box={background:'#fff',border:'1px solid #EAF0F7',borderRadius:18,padding:24,marginBottom:18};
+  if(st.cart.length===0) return React.createElement('div',{style:{maxWidth:600,margin:'0 auto',padding:'80px 24px',textAlign:'center',color:'#9CADC2'}},'Votre panier est vide.');
+  return React.createElement('div',{style:{maxWidth:1000,margin:'0 auto',padding:'34px 24px'}},
+    React.createElement('a',{onClick:()=>c.go('cart'),style:{display:'inline-flex',alignItems:'center',gap:7,fontSize:13.5,fontWeight:700,color:'#5A6B82',cursor:'pointer',marginBottom:16}},Icon('back',16,'#5A6B82'),'Retour au panier'),
+    React.createElement('h1',{style:{fontSize:32,fontWeight:800,letterSpacing:'-.5px',marginBottom:6}},'Finalisation de la commande'),
+    React.createElement('p',{style:{fontSize:15,color:'#5A6B82',marginBottom:26}},'Confirmez le point de livraison. La commande est envoyée au fournisseur pour validation.'),
+    React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1.5fr 1fr',gap:28,alignItems:'start'}},
+      React.createElement('div',null,
+        React.createElement('div',{style:box},
+          React.createElement('div',{style:{fontSize:16,fontWeight:800,marginBottom:16,display:'flex',gap:9,alignItems:'center'}},React.createElement('span',{style:{width:26,height:26,borderRadius:8,background:'#EAF4FD',display:'flex',alignItems:'center',justifyContent:'center'}},Icon('pin',15,'#1E7FE5')),'Point de livraison'),
+          React.createElement('div',{style:{marginBottom:14}},React.createElement('label',{style:label},'Établissement'),React.createElement('input',{style:field,defaultValue:'CHU Ibn Rochd — Service des urgences'})),
+          React.createElement('div',{style:{display:'grid',gridTemplateColumns:'2fr 1fr',gap:12,marginBottom:14}},
+            React.createElement('div',null,React.createElement('label',{style:label},'Adresse / point de pose'),React.createElement('input',{style:field,defaultValue:'Quartier Hôpitaux, Casablanca'})),
+            React.createElement('div',null,React.createElement('label',{style:label},'Bâtiment'),React.createElement('input',{style:field,defaultValue:'Toit pavillon B'}))),
+          React.createElement('div',null,React.createElement('label',{style:label},'Contact réception'),React.createElement('input',{style:field,defaultValue:'Dr. Benali · +212 6 61 22 33 44'}))),
+        React.createElement('div',{style:box},
+          React.createElement('div',{style:{fontSize:16,fontWeight:800,marginBottom:16,display:'flex',gap:9,alignItems:'center'}},React.createElement('span',{style:{width:26,height:26,borderRadius:8,background:'#EAF4FD',display:'flex',alignItems:'center',justifyContent:'center'}},Icon('note',15,'#1E7FE5')),'Note à la commande',React.createElement('span',{style:{fontSize:11.5,fontWeight:700,color:'#9CADC2'}},'(facultatif)')),
+          React.createElement('textarea',{value:st.note,onChange:e=>c.setState({note:e.target.value}),placeholder:'Ex. : patient en choc anaphylactique, livraison prioritaire au bloc 3…',style:Object.assign({},field,{minHeight:90,resize:'vertical',lineHeight:1.5})})),
+        React.createElement('div',{style:box},
+          React.createElement('div',{style:{fontSize:16,fontWeight:800,marginBottom:16,display:'flex',gap:9,alignItems:'center'}},React.createElement('span',{style:{width:26,height:26,borderRadius:8,background:'#FDECEC',display:'flex',alignItems:'center',justifyContent:'center'}},Icon('bolt',15,'#E5484D')),'Priorité'),
+          React.createElement('div',{style:{display:'flex',gap:12}},
+            React.createElement(PrioCard,{active:true,t:'Urgence vitale',d:'Vol prioritaire immédiat',ic:'bolt'}),
+            React.createElement(PrioCard,{active:false,t:'Standard',d:'Créneau optimisé',ic:'clock'})))),
+      React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:18,padding:24,position:'sticky',top:120}},
+        React.createElement('h3',{style:{fontSize:18,fontWeight:800,marginBottom:16}},'Votre commande'),
+        st.cart.map(i=>React.createElement('div',{key:i.key,style:{display:'flex',justifyContent:'space-between',fontSize:13.5,marginBottom:10,color:'#4A5C73'}},React.createElement('span',null,i.qty+'× '+i.name+(i.opt?' ('+i.opt+')':'')),React.createElement('span',{style:{fontWeight:700,color:'#15233B'}},i.eta+' min'))),
+        React.createElement('div',{style:{borderTop:'1px dashed #E2EAF2',margin:'14px 0'}}),
+        React.createElement(SummaryRow,{l:'Articles',v:c.cartCount()}),
+        React.createElement(SummaryRow,{l:'Livraison estimée',v:'~ '+c.fastEta()+' min'}),
+        React.createElement('button',{onClick:()=>c.go('confirm'),style:{width:'100%',marginTop:8,border:'none',background:'#1E7FE5',color:'#fff',padding:'15px',borderRadius:13,fontSize:15,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8,boxShadow:'0 8px 22px rgba(30,127,229,.3)'}},Icon('check',18,'#fff'),'Confirmer la commande'),
+        React.createElement('div',{style:{textAlign:'center',fontSize:12,color:'#9CADC2',marginTop:12,lineHeight:1.5}},'En validant, vous confirmez le besoin médical et la traçabilité du produit.'))
+    )
+  );
+}
+function PrioCard(props){
+  return React.createElement('div',{style:{flex:1,border:'1.5px solid '+(props.active?'#E5484D':'#E2EAF2'),background:props.active?'#FDECEC':'#fff',borderRadius:13,padding:'14px',cursor:'pointer'}},
+    React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}},Icon(props.ic,19,props.active?'#E5484D':'#9CADC2'),
+      React.createElement('span',{style:{width:18,height:18,borderRadius:'50%',border:'2px solid '+(props.active?'#E5484D':'#CBD7E4'),background:props.active?'#E5484D':'#fff',display:'flex',alignItems:'center',justifyContent:'center'}},props.active&&Icon('check',11,'#fff'))),
+    React.createElement('div',{style:{fontSize:14,fontWeight:800,marginBottom:2,color:props.active?'#9B2C30':'#15233B'}},props.t),
+    React.createElement('div',{style:{fontSize:12,color:props.active?'#B5565A':'#5A6B82'}},props.d));
+}
+
+// ============== CONFIRM ==============
+function ConfirmScreen(props){
+  const c=props.c, st=c.state;
+  return React.createElement('div',{style:{maxWidth:640,margin:'0 auto',padding:'70px 24px',textAlign:'center'}},
+    React.createElement('div',{style:{width:96,height:96,borderRadius:'50%',background:'#E2F0DD',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 24px',animation:'mfin .5s ease'}},Icon('check',50,'#1FA97A')),
+    React.createElement('h1',{style:{fontSize:30,fontWeight:800,letterSpacing:'-.5px',marginBottom:10}},'Commande envoyée !'),
+    React.createElement('p',{style:{fontSize:15.5,color:'#5A6B82',lineHeight:1.6,marginBottom:8,maxWidth:460,marginLeft:'auto',marginRight:'auto'}},'Votre commande a été transmise au fournisseur. Vous serez notifié dès sa confirmation et au décollage du drone.'),
+    React.createElement('div',{style:{display:'inline-flex',alignItems:'center',gap:10,background:'#EAF4FD',padding:'10px 18px',borderRadius:30,fontSize:14,fontWeight:800,color:'#1565D8',margin:'12px 0 28px'}},Icon('box',17,'#1565D8'),'N° MF-2026-0482'),
+    st.note&&React.createElement('div',{style:{maxWidth:460,margin:'0 auto 24px',textAlign:'left',background:'#fff',border:'1px solid #EAF0F7',borderRadius:14,padding:'14px 16px'}},React.createElement('div',{style:{fontSize:12,fontWeight:700,color:'#9CADC2',marginBottom:5,display:'flex',gap:6,alignItems:'center'}},Icon('note',14,'#9CADC2'),'Note jointe'),React.createElement('div',{style:{fontSize:13.5,color:'#3A4A60',lineHeight:1.5}},st.note)),
+    React.createElement('div',{style:{display:'flex',gap:12,justifyContent:'center'}},
+      React.createElement('button',{onClick:()=>c.go('tracking',{flyProgress:0.06,cart:[],note:''}),style:{border:'none',background:'#1E7FE5',color:'#fff',padding:'14px 26px',borderRadius:13,fontSize:14.5,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',gap:8,boxShadow:'0 8px 22px rgba(30,127,229,.3)'}},Icon('drone',18,'#fff'),'Suivre la commande'),
+      React.createElement('button',{onClick:()=>c.go('history',{cart:[],note:''}),style:{border:'1.5px solid #E2EAF2',background:'#fff',color:'#3A4A60',padding:'14px 22px',borderRadius:13,fontSize:14.5,fontWeight:700,cursor:'pointer'}},'Voir l’historique'))
+  );
+}
+
+// rendu du flux caméra ESP32-CAM (MJPEG WiFi via <img>), sinon placeholder animé
+function CamFeed(c, big){
+  const url=c.state.camUrl;
+  const inner = (url && !c.state.camErr)
+    ? React.createElement('img',{src:url,alt:'Flux caméra',onError:()=>c.setState({camErr:true}),style:{width:'100%',height:'100%',objectFit:'cover',display:'block'}})
+    : React.createElement('div',{style:{position:'absolute',inset:0,background:'radial-gradient(120% 90% at 50% 30%, #28384f 0%, #141f30 70%, #0c1421 100%)',overflow:'hidden'}},
+        // ligne de balayage
+        React.createElement('div',{style:{position:'absolute',left:0,right:0,height:'42%',background:'linear-gradient(180deg, rgba(110,180,242,0) 0%, rgba(110,180,242,.14) 100%)',animation:'mfscan 3.2s linear infinite'}}),
+        // réticule
+        React.createElement('div',{style:{position:'absolute',inset:0,backgroundImage:'linear-gradient(rgba(110,180,242,.10) 1px, transparent 1px), linear-gradient(90deg, rgba(110,180,242,.10) 1px, transparent 1px)',backgroundSize:(big?44:26)+'px '+(big?44:26)+'px'}}),
+        React.createElement('div',{style:{position:'absolute',top:'50%',left:'50%',width:big?54:30,height:big?54:30,transform:'translate(-50%,-50%)',border:'1.5px solid rgba(140,200,245,.5)',borderRadius:'50%'}}),
+        React.createElement('div',{style:{position:'absolute',top:'50%',left:'50%',width:big?80:44,height:1,transform:'translate(-50%,-50%)',background:'rgba(140,200,245,.35)'}}),
+        React.createElement('div',{style:{position:'absolute',top:'50%',left:'50%',width:1,height:big?80:44,transform:'translate(-50%,-50%)',background:'rgba(140,200,245,.35)'}}),
+        big&&React.createElement('div',{style:{position:'absolute',bottom:16,left:16,fontFamily:'monospace',fontSize:12,color:'#9fc4e8',letterSpacing:.5,lineHeight:1.5}},'ESP32-CAM · MJPEG',React.createElement('br'),c.state.camErr?'Flux indisponible — vérifier l’URL':'Flux en attente d’URL'));
+  return inner;
+}
+
+// petit panneau de configuration de l'URL ESP32-CAM
+function CamConfig(c){
+  return React.createElement('div',{style:{position:'fixed',inset:0,zIndex:9999,background:'rgba(8,14,24,.7)',backdropFilter:'blur(3px)',display:'flex',alignItems:'center',justifyContent:'center',padding:24}},
+    React.createElement('div',{style:{background:'#fff',borderRadius:16,padding:'22px 22px 18px',width:'100%',maxWidth:360,boxShadow:'0 20px 50px rgba(0,0,0,.4)'}},
+      React.createElement('div',{style:{display:'flex',alignItems:'center',gap:9,marginBottom:6}},Icon('camera',20,'#1E7FE5'),React.createElement('div',{style:{fontSize:16,fontWeight:800}},'Source caméra ESP32-CAM')),
+      React.createElement('div',{style:{fontSize:12.5,color:'#5A6B82',lineHeight:1.5,marginBottom:14}},'Adresse du flux MJPEG diffusé par la carte ESP32-CAM (CameraWebServer) sur le réseau WiFi.'),
+      React.createElement('input',{id:'mf-cam-input',defaultValue:c.state.camUrl||'',placeholder:'http://192.168.4.1:81/stream',style:{width:'100%',boxSizing:'border-box',border:'1.5px solid #D9E3EE',borderRadius:11,padding:'12px 14px',fontSize:13.5,fontFamily:'monospace',marginBottom:14,outline:'none'}}),
+      React.createElement('div',{style:{display:'flex',gap:10}},
+        React.createElement('button',{onClick:()=>{var v=document.getElementById('mf-cam-input');c.setCamUrl(v?v.value.trim():'');},style:{flex:1,border:'none',background:'#1E7FE5',color:'#fff',padding:'12px',borderRadius:11,fontSize:14,fontWeight:700,cursor:'pointer'}},'Connecter le flux'),
+        React.createElement('button',{onClick:()=>c.toggleCamConfig(),style:{border:'1.5px solid #E2EAF2',background:'#fff',color:'#5A6B82',padding:'12px 16px',borderRadius:11,fontSize:14,fontWeight:700,cursor:'pointer'}},'Annuler')),
+      c.state.camUrl&&React.createElement('button',{onClick:()=>c.setCamUrl(''),style:{width:'100%',marginTop:10,border:'none',background:'transparent',color:'#E5484D',padding:'6px',fontSize:12.5,fontWeight:700,cursor:'pointer'}},'Retirer la source')));
+}
+
+// ============== REAL MAP (Leaflet / OpenStreetMap) ==============
+function droneIcon(L, heading){
+  return L.divIcon({className:'',iconSize:[44,44],iconAnchor:[22,22],html:
+    '<div style="position:relative;width:44px;height:44px">'
+    +'<div style="position:absolute;inset:0;border-radius:50%;background:rgba(30,127,229,.16)"></div>'
+    +'<div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:32px;height:32px;border-radius:50%;background:#1E7FE5;border:3px solid #fff;box-shadow:0 4px 12px rgba(30,127,229,.5);display:flex;align-items:center;justify-content:center">'
+    +'<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="transform:rotate('+(heading||0)+'deg)"><path d="M7 7h10"/><path d="M5 7l-2-2M5 7l2-2"/><path d="M19 7l2-2M19 7l-2-2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 15l-1 3h8l-1-3"/></svg>'
+    +'</div></div>'});
+}
+function RealMap(props){
+  const c=props.c, t=props.t;
+  const elRef=React.useRef(null);
+  const ref=React.useRef({});
+  // Casablanca — dépôt CRTS → CHU Ibn Rochd (cohérent avec la télémétrie GPS simulée)
+  const A=[33.5731,-7.5898];
+  const B=[33.5931,-7.5748];
+  function curPos(){
+    let lat=parseFloat(t.lat), lon=parseFloat(t.lon), prog=t.progress||0;
+    if(!t.gpsFix || !isFinite(lat) || Math.abs(lat)<1 || Math.abs(lon)<1){
+      lat=A[0]+(B[0]-A[0])*prog; lon=A[1]+(B[1]-A[1])*prog;
+    }
+    return [lat,lon];
+  }
+  function update(){
+    const L=window.L, R=ref.current; if(!L||!R.map) return;
+    const pos=curPos();
+    R.drone.setLatLng(pos);
+    R.drone.setIcon(droneIcon(L, t.heading||0));
+    R.done.setLatLngs([A,pos]);
+    R.todo.setLatLngs([pos,B]);
+  }
+  React.useEffect(function(){
+    let stop=false;
+    (function init(){
+      if(stop) return;
+      const L=window.L;
+      if(!L || !elRef.current){ setTimeout(init,150); return; }
+      if(ref.current.map) return;
+      const map=L.map(elRef.current,{zoomControl:false,attributionControl:false,scrollWheelZoom:false,doubleClickZoom:false}).setView([(A[0]+B[0])/2,(A[1]+B[1])/2],14);
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',{maxZoom:20,subdomains:'abcd'}).addTo(map);
+      ref.current.done=L.polyline([A],{color:'#1E7FE5',weight:4,opacity:.95}).addTo(map);
+      ref.current.todo=L.polyline([A,B],{color:'#7FB1E8',weight:3,opacity:.85,dashArray:'3 9'}).addTo(map);
+      L.marker(A,{icon:L.divIcon({className:'',iconSize:[18,18],iconAnchor:[9,9],html:'<div style="width:16px;height:16px;border-radius:50%;background:#1565D8;border:3px solid #fff;box-shadow:0 2px 6px rgba(21,35,59,.4)"></div>'})}).addTo(map).bindTooltip('Dépôt CRTS',{permanent:true,direction:'left',className:'mf-tip',offset:[-8,0]});
+      L.marker(B,{icon:L.divIcon({className:'',iconSize:[22,22],iconAnchor:[11,11],html:'<div style="width:20px;height:20px;border-radius:50%;background:#fff;border:3px solid #E5484D;box-shadow:0 2px 6px rgba(21,35,59,.4);display:flex;align-items:center;justify-content:center"><div style="width:7px;height:7px;border-radius:50%;background:#E5484D"></div></div>'})}).addTo(map).bindTooltip('CHU Ibn Rochd',{permanent:true,direction:'right',className:'mf-tip',offset:[8,0]});
+      ref.current.drone=L.marker(A,{zIndexOffset:1000,icon:droneIcon(L,0)}).addTo(map);
+      ref.current.map=map;
+      map.fitBounds(L.latLngBounds([A,B]).pad(0.45));
+      setTimeout(function(){ if(ref.current.map) ref.current.map.invalidateSize(); },140);
+      update();
+    })();
+    return function(){ stop=true; if(ref.current.map){ ref.current.map.remove(); ref.current.map=null; } };
+  },[]);
+  React.useEffect(update);
+  return React.createElement('div',{ref:elRef,style:{position:'absolute',inset:0,zIndex:0}});
+}
+
+// ============== FLIGHT MAP (shared) ==============
+function FlightMap(props){
+  const c=props.c, t=c.telemetry(), prog=t.progress, st=c.state;
+  const x=70+prog*(660-70), y=230-Math.sin(prog*Math.PI)*120;
+  const bm=t.boxMotion; // 'idle' | 'ascending' | 'descending'
+  // bandeau de signalisation du mouvement vertical de la box
+  const bmBanner = bm!=='idle' && React.createElement('div',{style:{position:'absolute',top:16,left:'50%',transform:'translateX(-50%)',zIndex:6,display:'flex',alignItems:'center',gap:10,background:bm==='descending'?'rgba(224,134,0,.96)':'rgba(30,127,229,.96)',color:'#fff',borderRadius:30,padding:'9px 18px 9px 12px',boxShadow:'0 8px 22px rgba(21,35,59,.28)',whiteSpace:'nowrap'}},
+    React.createElement('span',{style:{width:30,height:30,borderRadius:'50%',background:'rgba(255,255,255,.22)',display:'flex',alignItems:'center',justifyContent:'center',animation:(bm==='descending'?'mfwinch':'mfwinchup')+' 1s ease-in-out infinite'}},Icon(bm==='descending'?'down':'up',18,'#fff')),
+    React.createElement('div',null,
+      React.createElement('div',{style:{fontSize:13.5,fontWeight:800,lineHeight:1.2}},bm==='descending'?'Descente de la box en cours':'Montée de la box en cours'),
+      React.createElement('div',{style:{fontSize:11,fontWeight:600,opacity:.9}},bm==='descending'?'Treuil déployé · livraison du colis':'Treuil rétracté · chargement du colis')));
+
+  // caméra plein écran (recouvre la map)
+  const camFull = st.camOpen && React.createElement('div',{style:{position:'absolute',inset:0,zIndex:8,background:'#0c1421',borderRadius:20,overflow:'hidden'}},
+    CamFeed(c,true),
+    // overlay HUD
+    React.createElement('div',{style:{position:'absolute',top:14,left:14,display:'flex',alignItems:'center',gap:8,background:'rgba(12,20,33,.55)',backdropFilter:'blur(4px)',borderRadius:20,padding:'7px 13px'}},
+      React.createElement('span',{style:{width:9,height:9,borderRadius:'50%',background:'#E5484D',animation:'mfblink 1.1s infinite'}}),
+      React.createElement('span',{style:{fontSize:12.5,fontWeight:800,color:'#fff',letterSpacing:.5}},'REC'),
+      React.createElement('span',{style:{fontSize:12,fontWeight:600,color:'#aac6e4',fontFamily:'monospace'}},t.time)),
+    bmBanner,
+    // fermer
+    React.createElement('button',{onClick:()=>c.closeCam(),style:{position:'absolute',top:14,right:14,width:38,height:38,borderRadius:'50%',border:'none',background:'rgba(12,20,33,.6)',color:'#fff',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}},Icon('close',20,'#fff')),
+    // compteur photos
+    st.photoCount>0&&React.createElement('div',{style:{position:'absolute',bottom:78,left:'50%',transform:'translateX(-50%)',fontSize:12,fontWeight:700,color:'#fff',background:'rgba(12,20,33,.55)',borderRadius:20,padding:'5px 13px'}},st.photoCount+' photo'+(st.photoCount>1?'s':'')+' capturée'+(st.photoCount>1?'s':'')),
+    // bouton prendre une photo
+    React.createElement('button',{onClick:()=>c.capturePhoto(),style:{position:'absolute',bottom:18,left:'50%',transform:'translateX(-50%)',display:'flex',alignItems:'center',gap:9,border:'none',background:'#fff',color:'#15233B',padding:'12px 22px',borderRadius:30,fontSize:14,fontWeight:800,cursor:'pointer',boxShadow:'0 8px 22px rgba(0,0,0,.35)'}},
+      React.createElement('span',{style:{width:22,height:22,borderRadius:'50%',border:'2.5px solid #15233B',display:'inline-block'}}),'Prendre une photo'),
+    // configurer la source
+    React.createElement('button',{onClick:()=>c.toggleCamConfig(),title:'Source caméra',style:{position:'absolute',bottom:20,right:16,width:40,height:40,borderRadius:'50%',border:'none',background:'rgba(12,20,33,.6)',color:'#fff',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}},Icon('camera',19,'#fff')),
+    // flash de capture
+    st.photoFlash&&React.createElement('div',{style:{position:'absolute',inset:0,background:'#fff',animation:'mfflash .42s ease-out forwards',pointerEvents:'none'}}));
+
+  // vignette caméra (PIP) cliquable
+  const camPip = !st.camOpen && React.createElement('div',{onClick:()=>c.openCam(),title:'Ouvrir le retour caméra',style:{position:'absolute',right:16,bottom:16,width:168,height:108,borderRadius:13,overflow:'hidden',cursor:'pointer',border:'2px solid rgba(255,255,255,.9)',boxShadow:'0 8px 22px rgba(21,35,59,.3)',zIndex:6,background:'#0c1421'}},
+    CamFeed(c,false),
+    React.createElement('div',{style:{position:'absolute',top:7,left:7,display:'flex',alignItems:'center',gap:5,background:'rgba(12,20,33,.55)',borderRadius:14,padding:'3px 8px'}},
+      React.createElement('span',{style:{width:7,height:7,borderRadius:'50%',background:'#E5484D',animation:'mfblink 1.1s infinite'}}),
+      React.createElement('span',{style:{fontSize:10,fontWeight:800,color:'#fff',letterSpacing:.4}},'CAM')),
+    React.createElement('div',{style:{position:'absolute',right:7,bottom:7,width:24,height:24,borderRadius:7,background:'rgba(12,20,33,.6)',display:'flex',alignItems:'center',justifyContent:'center'}},Icon('expand',14,'#fff')),
+    React.createElement('div',{style:{position:'absolute',left:7,bottom:7,fontSize:9.5,fontWeight:700,color:'#cfe0f2',fontFamily:'monospace'}},'Toucher pour agrandir'));
+
+  return React.createElement('div',{style:{background:'#dbe9f7',borderRadius:20,overflow:'hidden',position:'relative',border:'1px solid #DCEAF8',height:'clamp(320px,40vw,460px)'}},
+    React.createElement(RealMap,{c:c,t:t}),
+    React.createElement('div',{style:{position:'absolute',top:16,left:16,background:'rgba(255,255,255,.92)',borderRadius:12,padding:'10px 14px',boxShadow:'0 6px 18px rgba(21,35,59,.12)',zIndex:5}},
+      React.createElement('div',{style:{fontSize:11.5,color:'#5A6B82',fontWeight:600}},'Arrivée estimée'),
+      React.createElement('div',{style:{fontSize:22,fontWeight:800,color:'#15233B'}},prog>=1?'Arrivé':t.eta+' min')),
+    bmBanner,
+    camPip,
+    camFull,
+    st.camConfig&&CamConfig(c));
+}
+
+// ============== TELEMETRY GRID (shared) ==============
+function Telemetry(props){
+  const c=props.c, t=c.telemetry(), live=t.source!=='Simulation';
+  const cell=(ic,lbl,val,unit,col)=>React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:14,padding:'14px 16px'}},
+    React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,fontSize:12,color:'#5A6B82',fontWeight:600,marginBottom:8}},Icon(ic,16,col||'#1E7FE5'),lbl),
+    React.createElement('div',{style:{fontSize:21,fontWeight:800}},val,React.createElement('span',{style:{fontSize:13,fontWeight:700,color:'#9CADC2',marginLeft:4}},unit)));
+  var bm=t.boxMotion, bmLbl=bm==='descending'?'Descente':bm==='ascending'?'Montée':'Verrouillée', bmCol=bm==='descending'?'#E08600':bm==='ascending'?'#1E7FE5':'#1FA97A';
+  return React.createElement('div',null,
+    // bandeau date / heure + source de données
+    React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',background:'#15233B',color:'#fff',borderRadius:14,padding:'12px 16px',marginBottom:12,flexWrap:'wrap',gap:10}},
+      React.createElement('div',{style:{display:'flex',alignItems:'center',gap:9}},Icon('calendar',16,'#6FB4F2'),React.createElement('span',{style:{fontSize:13.5,fontWeight:700}},t.date)),
+      React.createElement('div',{style:{display:'flex',alignItems:'center',gap:9}},Icon('clock',16,'#6FB4F2'),React.createElement('span',{style:{fontSize:16,fontWeight:800,fontFamily:'monospace',letterSpacing:.5}},t.time)),
+      React.createElement('span',{style:{display:'inline-flex',alignItems:'center',gap:6,fontSize:11.5,fontWeight:700,background:live?'rgba(31,169,122,.2)':'rgba(255,255,255,.12)',color:live?'#7FE3BC':'#A9BACF',padding:'5px 11px',borderRadius:20}},React.createElement('span',{style:{width:7,height:7,borderRadius:'50%',background:live?'#1FA97A':'#7E92AB',animation:live?'mfblink 1s infinite':'none'}}),t.source)),
+    React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:12}},
+      cell('gauge','Vitesse (GPS)',t.speed,'km/h'),
+      cell('alt','Altitude (BMP280)',t.alt,'m'),
+      cell('thermo','Température ext.',t.temp,'°C','#E08600'),
+      cell('signal','Satellites GPS',t.sats,t.gpsFix?'· fix':'· no fix','#1565D8'),
+      cell('drone','Attitude (R/P)',t.roll+'° / '+t.pitch,'°','#7A5BD6'),
+      React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:14,padding:'14px 16px'}},
+        React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,fontSize:12,color:'#5A6B82',fontWeight:600,marginBottom:8}},Icon(bm==='descending'?'down':bm==='ascending'?'up':'box',16,bmCol),'Treuil / box'),
+        React.createElement('div',{style:{fontSize:18,fontWeight:800,color:bmCol,display:'flex',alignItems:'center',gap:6}},bmLbl,bm!=='idle'&&React.createElement('span',{style:{width:8,height:8,borderRadius:'50%',background:bmCol,animation:'mfblink 1s infinite'}})))));
+}
+
+// bouton de connexion USB au firmware (Web Serial)
+function DroneLink(props){
+  const c=props.c, on=c.state.serialOn;
+  return React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:16,padding:'14px 16px',marginTop:14}},
+    React.createElement('div',{style:{display:'flex',alignItems:'center',gap:12}},
+      React.createElement('span',{style:{width:40,height:40,borderRadius:11,flexShrink:0,background:on?'#E2F0DD':'#EAF4FD',display:'flex',alignItems:'center',justifyContent:'center'}},Icon(on?'check':'bolt',20,on?'#1FA97A':'#1E7FE5')),
+      React.createElement('div',{style:{flex:1,minWidth:0}},
+        React.createElement('div',{style:{fontSize:13.5,fontWeight:800}},on?'Drone connecté (USB)':'Connexion directe au drone'),
+        React.createElement('div',{style:{fontSize:11.5,color:'#9CADC2',fontWeight:600}},on?'Télémétrie firmware en direct · 115200 baud':'Lit la télémétrie du firmware ESP32 via Web Serial')),
+      on
+        ? React.createElement('button',{onClick:()=>c.disconnectSerial(),style:{border:'1.5px solid #F2C4C6',background:'#fff',color:'#E5484D',padding:'9px 14px',borderRadius:10,fontSize:13,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'}},'Déconnecter')
+        : React.createElement('button',{onClick:()=>c.connectSerial(),style:{border:'none',background:'#1E7FE5',color:'#fff',padding:'9px 15px',borderRadius:10,fontSize:13,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'}},'Connecter')),
+    c.state.serialErr&&React.createElement('div',{style:{marginTop:10,fontSize:12,color:'#9B2C30',background:'#FDECEC',borderRadius:9,padding:'8px 11px',lineHeight:1.4}},c.state.serialErr));
+}
+
+// ============== TRACKING (client) ==============
+function TrackingScreen(props){
+  const c=props.c, t=c.telemetry(), prog=t.progress;
+  const steps=[['Commande confirmée',0],['Drone chargé',0.18],['En vol',0.4],['Approche',0.82],['Livré',1]];
+  const curIdx=steps.reduce((a,s,i)=>prog>=s[1]?i:a,0);
+  return React.createElement('div',{style:{maxWidth:1100,margin:'0 auto',padding:'34px 24px'}},
+    React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}},
+      React.createElement('h1',{style:{fontSize:32,fontWeight:800,letterSpacing:'-.5px'}},'Suivi de votre commande'),
+      React.createElement('span',{style:{background:prog>=1?'#E2F0DD':'#FDECEC',color:prog>=1?'#1FA97A':'#9B2C30',fontSize:13,fontWeight:800,padding:'8px 15px',borderRadius:30,display:'flex',alignItems:'center',gap:7}},React.createElement('span',{style:{width:8,height:8,borderRadius:'50%',background:prog>=1?'#1FA97A':'#E5484D',animation:prog<1?'mfpulse 1.6s infinite':'none'}}),prog>=1?'Colis livré':'En transit')),
+    React.createElement('p',{style:{fontSize:14.5,color:'#5A6B82',marginBottom:24}},'Commande #MF-2026-0482 · CRTS Casablanca → CHU Ibn Rochd'),
+    React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1.5fr 1fr',gap:24,alignItems:'start'}},
+      React.createElement('div',null,
+        React.createElement(FlightMap,{c}),
+        React.createElement('div',{style:{marginTop:14}},React.createElement(Telemetry,{c}),React.createElement(DroneLink,{c}))),
+      React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:20,padding:24}},
+        React.createElement('div',{style:{display:'flex',gap:14,alignItems:'center',marginBottom:22,paddingBottom:20,borderBottom:'1px solid #EEF3F9'}},
+          React.createElement('div',{style:{width:52,height:52,borderRadius:14,background:'#EAF4FD',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}},Icon('drone',28,'#1E7FE5')),
+          React.createElement('div',null,React.createElement('div',{style:{fontSize:12.5,color:'#5A6B82',fontWeight:600}},'Drone'),React.createElement('div',{style:{fontSize:16,fontWeight:800}},'MF-Falcon 07'),React.createElement('div',{style:{fontSize:12,color:t.bat<45?'#E08600':'#1FA97A',fontWeight:700,display:'flex',gap:5,alignItems:'center',marginTop:2}},Icon('battery',15,t.bat<45?'#E08600':'#1FA97A'),'Batterie '+t.bat+'%'))),
+        steps.map((s,i)=>{const done=i<=curIdx;return React.createElement('div',{key:i,style:{display:'flex',gap:13,paddingBottom:i<steps.length-1?18:0,position:'relative'}},
+          i<steps.length-1&&React.createElement('div',{style:{position:'absolute',left:12,top:24,width:2,height:'100%',background:i<curIdx?'#1E7FE5':'#E7EEF6'}}),
+          React.createElement('div',{style:{width:25,height:25,borderRadius:'50%',flexShrink:0,zIndex:1,background:done?'#1E7FE5':'#fff',border:'2px solid '+(done?'#1E7FE5':'#D7E2EE'),display:'flex',alignItems:'center',justifyContent:'center'}},done?Icon('check',13,'#fff'):React.createElement('span',{style:{width:7,height:7,borderRadius:'50%',background:'#C5D3E2'}})),
+          React.createElement('div',{style:{paddingTop:1}},React.createElement('div',{style:{fontSize:14.5,fontWeight:done?800:600,color:done?'#15233B':'#9CADC2'}},s[0]),i===curIdx&&prog<1&&React.createElement('div',{style:{fontSize:12,color:'#1E7FE5',fontWeight:700,marginTop:2}},'En cours…')));}),
+        React.createElement('button',{onClick:()=>c.go('home'),style:{width:'100%',marginTop:22,border:'1.5px solid #E2EAF2',background:'#fff',color:'#3A4A60',padding:'13px',borderRadius:12,fontSize:14,fontWeight:700,cursor:'pointer'}},'Retour au catalogue'))
+    )
+  );
+}
+
+// ============== HISTORY (client) ==============
+function HistoryScreen(props){
+  const c=props.c;
+  return React.createElement('div',{style:{maxWidth:900,margin:'0 auto',padding:'34px 24px'}},
+    React.createElement('h1',{style:{fontSize:32,fontWeight:800,letterSpacing:'-.5px',marginBottom:6}},'Mes commandes'),
+    React.createElement('p',{style:{fontSize:14.5,color:'#5A6B82',marginBottom:24}},'Historique de vos livraisons par drone.'),
+    React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:12}},
+      c.clientOrders().map(o=>React.createElement('div',{key:o.id,style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:16,padding:'16px 20px',display:'flex',alignItems:'center',gap:18}},
+        React.createElement('div',{style:{width:48,height:48,borderRadius:13,background:'#EAF4FD',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}},Icon('box',24,'#1565D8')),
+        React.createElement('div',{style:{flex:1}},
+          React.createElement('div',{style:{display:'flex',alignItems:'center',gap:10,marginBottom:4}},React.createElement('span',{style:{fontSize:15,fontWeight:800,color:'#1565D8'}},o.id),React.createElement('span',{style:{fontSize:12,color:'#9CADC2',fontWeight:600}},o.date)),
+          React.createElement('div',{style:{fontSize:13.5,color:'#3A4A60'}},o.items)),
+        React.createElement('span',{style:{fontSize:12.5,fontWeight:700,color:o.c,background:o.c+'18',padding:'6px 12px',borderRadius:20,display:'flex',alignItems:'center',gap:6}},React.createElement('span',{style:{width:7,height:7,borderRadius:'50%',background:o.c}}),o.status),
+        o.status==='En vol'
+          ? React.createElement('button',{onClick:()=>c.go('tracking',{flyProgress:0.5}),style:{border:'none',background:'#1E7FE5',color:'#fff',padding:'10px 16px',borderRadius:11,fontSize:13,fontWeight:700,cursor:'pointer'}},'Suivre')
+          : React.createElement('button',{onClick:()=>c.go('home'),style:{border:'1.5px solid #E2EAF2',background:'#fff',color:'#3A4A60',padding:'10px 16px',borderRadius:11,fontSize:13,fontWeight:700,cursor:'pointer'}},'Recommander'))))
+  );
+}
+
+// ============== SUPPLIER SHELL (Interface 2 - répondeur) ==============
+function SupplierShell(props){
+  const c=props.c, sup=c.state.supScreen, collapsed=c.state.supNavCollapsed;
+  const nav=[['grid','Tableau de bord','dashboard'],['box','Commandes','order'],['drone','Données de vol','flight'],['clock','Historique','history']];
+  const content = sup==='order'?React.createElement(SupOrder,{c}) : sup==='flight'?React.createElement(SupFlight,{c}) : sup==='history'?React.createElement(SupHistory,{c}) : React.createElement(SupDashboard,{c});
+
+  // barre latérale repliée : rail d'icônes
+  const railCollapsed = React.createElement('div',{style:{width:62,background:'#15233B',display:'flex',flexDirection:'column',alignItems:'center',padding:'18px 0',flexShrink:0,gap:6}},
+    React.createElement('div',{onClick:()=>c.toggleSupNav(),title:'Afficher le menu',style:{width:40,height:40,borderRadius:11,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',background:'#1E2E47',marginBottom:10}},Icon('menu',20,'#9FB2CB')),
+    nav.map(n=>{const a=sup===n[2];return React.createElement('div',{key:n[2],onClick:()=>c.goSup(n[2]),title:n[1],style:{width:40,height:40,borderRadius:11,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',background:a?'#1E7FE5':'transparent'}},Icon(n[0],20,a?'#fff':'#7E92AB'));}),
+    React.createElement('div',{onClick:()=>c.go('login'),title:'Déconnexion',style:{marginTop:'auto',width:40,height:40,borderRadius:11,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer'}},Icon('logout',20,'#7E92AB')));
+
+  // barre latérale complète
+  const railFull = React.createElement('div',{style:{width:240,background:'#15233B',display:'flex',flexDirection:'column',padding:'22px 16px',flexShrink:0}},
+    React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}},
+      React.createElement('div',{style:{background:'#fff',borderRadius:11,padding:'9px 13px',display:'inline-flex'}},React.createElement(Logo,{h:24})),
+      React.createElement('div',{onClick:()=>c.toggleSupNav(),title:'Masquer le menu',style:{width:34,height:34,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',background:'#1E2E47'}},Icon('back',18,'#9FB2CB'))),
+    React.createElement('div',{style:{fontSize:11,color:'#6B7F99',fontWeight:700,textTransform:'uppercase',letterSpacing:.6,padding:'10px 8px 12px'}},'Espace fournisseur'),
+    nav.map(n=>{const a=sup===n[2];return React.createElement('div',{key:n[2],onClick:()=>c.goSup(n[2]),style:{display:'flex',alignItems:'center',gap:12,padding:'11px 14px',borderRadius:11,marginBottom:4,cursor:'pointer',background:a?'#1E7FE5':'transparent',color:a?'#fff':'#A9BACF',fontSize:14,fontWeight:700}},Icon(n[0],19,a?'#fff':'#7E92AB'),n[1]);}),
+    React.createElement('div',{style:{marginTop:'auto'}},
+      React.createElement('div',{style:{background:'#1E2E47',borderRadius:13,padding:'14px',color:'#C7D4E4',marginBottom:8}},
+        React.createElement('div',{style:{fontSize:12,fontWeight:700,marginBottom:6,display:'flex',gap:7,alignItems:'center'}},React.createElement('span',{style:{width:8,height:8,borderRadius:'50%',background:'#1FA97A'}}),'Système opérationnel'),
+        React.createElement('div',{style:{fontSize:11.5,color:'#8DA0B8',lineHeight:1.5}},'4 drones actifs · météo favorable')),
+      React.createElement('div',{onClick:()=>c.go('login'),style:{display:'flex',alignItems:'center',gap:11,padding:'11px 14px',borderRadius:11,cursor:'pointer',color:'#A9BACF',fontSize:14,fontWeight:700}},Icon('logout',19,'#7E92AB'),'Déconnexion')));
+
+  return React.createElement('div',{style:{display:'flex',minHeight:'100vh',background:'#F2F8FE'}},
+    collapsed?railCollapsed:railFull,
+    React.createElement('div',{style:{flex:1,padding:'26px 30px',overflow:'auto'}},content)
+  );
+}
+
+function SupHeader(props){
+  const c=props.c;
+  return React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:24}},
+    React.createElement('div',null,React.createElement('h1',{style:{fontSize:26,fontWeight:800,letterSpacing:'-.4px'}},props.title),props.sub&&React.createElement('p',{style:{fontSize:14,color:'#5A6B82',marginTop:3}},props.sub)));
+}
+
+function statCard(t,v,sub,ic,col){return React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:16,padding:'18px 20px'}},
+  React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}},React.createElement('span',{style:{fontSize:13,color:'#5A6B82',fontWeight:600}},t),React.createElement('span',{style:{width:34,height:34,borderRadius:10,background:col+'1A',display:'flex',alignItems:'center',justifyContent:'center'}},Icon(ic,18,col))),
+  React.createElement('div',{style:{fontSize:26,fontWeight:800,whiteSpace:'nowrap'}},v),
+  React.createElement('div',{style:{fontSize:12,color:'#9CADC2',fontWeight:600,marginTop:3}},sub));}
+
+function statusChip(o){return React.createElement('span',{style:{display:'inline-flex',alignItems:'center',gap:6,fontSize:12.5,fontWeight:700,color:o.c,background:o.c+'18',padding:'5px 11px',borderRadius:20,width:'fit-content'}},React.createElement('span',{style:{width:6,height:6,borderRadius:'50%',background:o.c}}),o.status);}
+
+// ----- Dashboard -----
+function SupDashboard(props){
+  const c=props.c, orders=c.supOrders();
+  const pending=orders.filter(o=>o.status==='À confirmer');
+  return React.createElement('div',null,
+    React.createElement(SupHeader,{c,title:'Tableau de bord'}),
+    React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16,marginBottom:24}},
+      statCard('À confirmer',String(pending.length),'demandes en attente','bolt','#E08600'),
+      statCard('Vols en cours','1','sur 4 drones','drone','#1E7FE5'),
+      statCard('Délai moyen','8,4 min','-1,2 min vs hier','clock','#1FA97A'),
+      statCard('Livrées aujourd’hui','37','100% à l’heure','check','#1565D8')),
+    React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1.7fr 1fr',gap:20,alignItems:'start'}},
+      React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:18,overflow:'hidden'}},
+        React.createElement('div',{style:{padding:'16px 20px',borderBottom:'1px solid #EEF3F9',fontSize:15.5,fontWeight:800}},'Demandes entrantes'),
+        React.createElement('div',{style:{display:'grid',gridTemplateColumns:'0.8fr 1.5fr 1fr 1fr 1fr',gap:10,padding:'10px 20px',fontSize:11,fontWeight:700,color:'#9CADC2',textTransform:'uppercase',letterSpacing:.4,borderBottom:'1px solid #F1F5FA'}},
+          React.createElement('span',null,'Réf'),React.createElement('span',null,'Demandeur'),React.createElement('span',null,'Priorité'),React.createElement('span',null,'Statut'),React.createElement('span',{style:{textAlign:'right'}},'Action')),
+        orders.map((o,i)=>React.createElement('div',{key:i,style:{display:'grid',gridTemplateColumns:'0.8fr 1.5fr 1fr 1fr 1fr',gap:10,padding:'14px 20px',alignItems:'center',borderBottom:i<orders.length-1?'1px solid #F4F7FB':'none',fontSize:13.5}},
+          React.createElement('span',{style:{fontWeight:800,color:'#1565D8'}},o.id),
+          React.createElement('div',null,React.createElement('div',{style:{fontWeight:700}},o.struct),React.createElement('div',{style:{fontSize:12,color:'#9CADC2'}},o.item)),
+          React.createElement('span',{style:{fontSize:12,fontWeight:700,color:o.prio==='Standard'?'#E08600':'#E5484D'}},o.prio),
+          statusChip(o),
+          React.createElement('div',{style:{textAlign:'right'}}, o.status==='À confirmer'
+            ? React.createElement('button',{onClick:()=>c.goSup('order',{activeOrder:o}),style:{border:'none',background:'#1E7FE5',color:'#fff',padding:'8px 13px',borderRadius:9,fontSize:12.5,fontWeight:700,cursor:'pointer'}},'Traiter')
+            : o.status==='En vol'
+              ? React.createElement('button',{onClick:()=>c.goSup('flight',{flyProgress:0.5}),style:{border:'1.5px solid #E2EAF2',background:'#fff',color:'#1565D8',padding:'8px 13px',borderRadius:9,fontSize:12.5,fontWeight:700,cursor:'pointer'}},'Vol')
+              : React.createElement('span',{style:{fontSize:12.5,color:'#9CADC2',fontWeight:700}},'—'))))),
+      React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:18,padding:20}},
+        React.createElement('div',{style:{fontSize:15.5,fontWeight:800,marginBottom:16}},'Flotte de drones'),
+        [{n:'Falcon 07',s:'En mission',bat:78,c:'#1E7FE5'},{n:'Falcon 03',s:'Disponible',bat:94,c:'#1FA97A'},{n:'Falcon 01',s:'Recharge',bat:41,c:'#E08600'},{n:'Falcon 12',s:'Disponible',bat:100,c:'#1FA97A'}].map((f,i,a)=>React.createElement('div',{key:i,style:{display:'flex',alignItems:'center',gap:13,padding:'12px 0',borderBottom:i<a.length-1?'1px solid #F4F7FB':'none'}},
+          React.createElement('div',{style:{width:42,height:42,borderRadius:12,background:f.c+'18',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}},Icon('drone',22,f.c)),
+          React.createElement('div',{style:{flex:1}},React.createElement('div',{style:{fontSize:14,fontWeight:800}},f.n),React.createElement('div',{style:{fontSize:12,fontWeight:700,color:f.c}},f.s)),
+          React.createElement('div',{style:{textAlign:'right'}},React.createElement('div',{style:{fontSize:13,fontWeight:800,display:'flex',alignItems:'center',gap:5,justifyContent:'flex-end',color:f.bat<45?'#E08600':'#1FA97A'}},Icon('battery',16,f.bat<45?'#E08600':'#1FA97A'),f.bat+'%'),React.createElement('div',{style:{width:70,height:6,borderRadius:3,background:'#EEF3F9',marginTop:5,overflow:'hidden'}},React.createElement('div',{style:{width:f.bat+'%',height:'100%',background:f.bat<45?'#E08600':'#1FA97A'}})))))))
+  );
+}
+
+// ----- Order detail / confirm -----
+function SupOrder(props){
+  const c=props.c, o=c.state.activeOrder||c.supOrders()[0];
+  const row=(l,v)=>React.createElement('div',{style:{display:'flex',justifyContent:'space-between',padding:'11px 0',borderBottom:'1px solid #F4F7FB',fontSize:14}},React.createElement('span',{style:{color:'#5A6B82',fontWeight:600}},l),React.createElement('span',{style:{fontWeight:700,textAlign:'right'}},v));
+  return React.createElement('div',null,
+    React.createElement('a',{onClick:()=>c.goSup('dashboard'),style:{display:'inline-flex',alignItems:'center',gap:7,fontSize:13.5,fontWeight:700,color:'#5A6B82',cursor:'pointer',marginBottom:16}},Icon('back',16,'#5A6B82'),'Retour au tableau de bord'),
+    React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:24}},
+      React.createElement('div',null,React.createElement('h1',{style:{fontSize:26,fontWeight:800,letterSpacing:'-.4px'}},'Commande '+o.id),React.createElement('p',{style:{fontSize:14,color:'#5A6B82',marginTop:3}},o.struct+' · '+o.city)),
+      statusChip(o)),
+    React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1.4fr 1fr',gap:20,alignItems:'start'}},
+      React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:18,padding:24}},
+        React.createElement('div',{style:{fontSize:16,fontWeight:800,marginBottom:8}},'Détail de la commande'),
+        row('Produit', o.item),
+        row('Priorité', React.createElement('span',{style:{color:o.prio==='Standard'?'#E08600':'#E5484D'}},o.prio)),
+        row('Demandeur', o.struct),
+        row('Destination', o.city),
+        row('Reçue', "Aujourd'hui · 11:24"),
+        React.createElement('div',{style:{marginTop:18,padding:'14px 16px',background:'#F2F8FE',borderRadius:13}},
+          React.createElement('div',{style:{fontSize:12,fontWeight:700,color:'#9CADC2',marginBottom:6,display:'flex',gap:6,alignItems:'center'}},Icon('note',14,'#9CADC2'),'Note du demandeur'),
+          React.createElement('div',{style:{fontSize:13.5,color:'#3A4A60',lineHeight:1.5}},'Patient en détresse respiratoire aux urgences, livraison prioritaire demandée.'))),
+      React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:18,padding:24,position:'sticky',top:0}},
+        React.createElement('div',{style:{fontSize:16,fontWeight:800,marginBottom:14}},'Action fournisseur'),
+        o.status==='À confirmer'
+          ? React.createElement('div',null,
+              React.createElement('p',{style:{fontSize:13.5,color:'#5A6B82',lineHeight:1.6,marginBottom:18}},'Confirmez la disponibilité du produit. Un drone sera assigné et décollera immédiatement.'),
+              React.createElement('div',{style:{marginBottom:14}},React.createElement('label',{style:{fontSize:12.5,fontWeight:700,color:'#3A4A60',marginBottom:6,display:'block'}},'Drone assigné'),React.createElement('div',{style:{display:'flex',alignItems:'center',gap:10,border:'1.5px solid #E2EAF2',borderRadius:11,padding:'11px 14px'}},Icon('drone',18,'#1565D8'),React.createElement('span',{style:{fontSize:14,fontWeight:700}},'Falcon 03 · 94%'),React.createElement('span',{style:{marginLeft:'auto',fontSize:12,fontWeight:700,color:'#1FA97A'}},'Disponible'))),
+              React.createElement('button',{onClick:()=>{c.setState(s=>({supOrdersConfirmed:true}));c.goSup('flight',{flyProgress:0.04});},style:{width:'100%',border:'none',background:'#1FA97A',color:'#fff',padding:'15px',borderRadius:13,fontSize:15,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8,boxShadow:'0 8px 22px rgba(31,169,122,.3)'}},Icon('check',18,'#fff'),'Confirmer et faire décoller'),
+              React.createElement('button',{style:{width:'100%',border:'1.5px solid #F2C4C6',background:'#fff',color:'#E5484D',padding:'13px',borderRadius:13,fontSize:14,fontWeight:700,cursor:'pointer',marginTop:10}},'Refuser la commande'))
+          : React.createElement('div',null,
+              React.createElement('div',{style:{padding:'16px',background:'#E2F0DD',borderRadius:13,display:'flex',gap:11,alignItems:'center',marginBottom:14}},React.createElement('span',{style:{width:38,height:38,borderRadius:'50%',background:'#1FA97A',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}},Icon('check',20,'#fff')),React.createElement('div',{style:{fontSize:13.5,color:'#15663F',fontWeight:700}},'Commande confirmée et en cours de livraison.')),
+              React.createElement('button',{onClick:()=>c.goSup('flight',{flyProgress:0.5}),style:{width:'100%',border:'none',background:'#1E7FE5',color:'#fff',padding:'14px',borderRadius:13,fontSize:14.5,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8}},Icon('drone',18,'#fff'),'Voir les données de vol'))))
+  );
+}
+
+// ----- Flight data -----
+function SupFlight(props){
+  const c=props.c, t=c.telemetry(), prog=t.progress;
+  return React.createElement('div',null,
+    React.createElement(SupHeader,{c,title:'Données de vol',sub:'Drone Falcon 03 · Commande MF-0481 · CRTS Casablanca → CHU Ibn Rochd'}),
+    React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1.5fr 1fr',gap:20,alignItems:'start'}},
+      React.createElement(FlightMap,{c}),
+      React.createElement('div',null,
+        React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:16,padding:'18px 20px',marginBottom:14,display:'flex',alignItems:'center',gap:14}},
+          React.createElement('div',{style:{width:52,height:52,borderRadius:14,background:'#EAF4FD',display:'flex',alignItems:'center',justifyContent:'center'}},Icon('drone',28,'#1E7FE5')),
+          React.createElement('div',{style:{flex:1}},React.createElement('div',{style:{fontSize:16,fontWeight:800}},'Falcon 03'),React.createElement('div',{style:{fontSize:13,fontWeight:700,color:prog>=1?'#1FA97A':'#1E7FE5'}},prog>=1?'Livraison effectuée':'En vol — télémétrie live')),
+          React.createElement('span',{style:{fontSize:13,fontWeight:800,color:'#15233B'}},prog>=1?'Arrivé':t.eta+' min')),
+        React.createElement(Telemetry,{c}),
+        React.createElement(DroneLink,{c}),
+        React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:16,padding:'16px 20px',marginTop:14}},
+          React.createElement('div',{style:{fontSize:13.5,fontWeight:800,marginBottom:10}},'Coordonnées GPS · NEO-6M'),
+          React.createElement('div',{style:{display:'flex',justifyContent:'space-between',fontSize:13,color:'#4A5C73',marginBottom:7}},React.createElement('span',null,'Latitude'),React.createElement('span',{style:{fontWeight:700,fontFamily:'monospace'}},t.lat+'° N')),
+          React.createElement('div',{style:{display:'flex',justifyContent:'space-between',fontSize:13,color:'#4A5C73',marginBottom:7}},React.createElement('span',null,'Longitude'),React.createElement('span',{style:{fontWeight:700,fontFamily:'monospace'}},t.lon+'° W')),
+          React.createElement('div',{style:{display:'flex',justifyContent:'space-between',fontSize:13,color:'#4A5C73'}},React.createElement('span',null,'Cap'),React.createElement('span',{style:{fontWeight:700,fontFamily:'monospace'}},t.heading+'°')))))
+  );
+}
+
+// ----- Supplier history -----
+function SupHistory(props){
+  const c=props.c, orders=c.supOrders();
+  return React.createElement('div',null,
+    React.createElement(SupHeader,{c,title:'Historique des commandes',sub:'Toutes les demandes traitées par votre structure'}),
+    React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:18,overflow:'hidden'}},
+      React.createElement('div',{style:{display:'grid',gridTemplateColumns:'0.8fr 1.6fr 1.2fr 1fr',gap:10,padding:'12px 20px',fontSize:11,fontWeight:700,color:'#9CADC2',textTransform:'uppercase',letterSpacing:.4,borderBottom:'1px solid #F1F5FA'}},
+        React.createElement('span',null,'Réf'),React.createElement('span',null,'Demandeur'),React.createElement('span',null,'Produit'),React.createElement('span',{style:{textAlign:'right'}},'Statut')),
+      orders.concat(c.clientOrders().map(o=>({id:o.id.replace('2026-','') ,struct:'—',item:o.items,status:o.status,c:o.c}))).map((o,i,a)=>React.createElement('div',{key:i,style:{display:'grid',gridTemplateColumns:'0.8fr 1.6fr 1.2fr 1fr',gap:10,padding:'14px 20px',alignItems:'center',borderBottom:i<a.length-1?'1px solid #F4F7FB':'none',fontSize:13.5}},
+        React.createElement('span',{style:{fontWeight:800,color:'#1565D8'}},o.id),
+        React.createElement('span',{style:{fontWeight:700}},o.struct),
+        React.createElement('span',{style:{color:'#5A6B82'}},o.item),
+        React.createElement('div',{style:{display:'flex',justifyContent:'flex-end'}},statusChip(o)))))
+  );
+}
+
+// ============================================================
+// ============== ABOUT — VITRINE MEDIFLY =====================
+// ============================================================
+function aboutScrollTo(id){
+  var el=document.getElementById(id);
+  if(el) window.scrollTo({top:Math.max(0, el.getBoundingClientRect().top+window.pageYOffset-100), behavior:'smooth'});
+}
+
+// Striped image placeholder (user supplies real images later)
+function ImgSlot(props){
+  var dark=props.dark, h=props.h||220, label=props.label||'image', r=(props.r!=null?props.r:16);
+  var stripes=dark
+    ? 'repeating-linear-gradient(135deg,#1b2c46 0,#1b2c46 11px,#21344f 11px,#21344f 22px)'
+    : 'repeating-linear-gradient(135deg,#EAF1FA 0,#EAF1FA 11px,#E0EAF6 11px,#E0EAF6 22px)';
+  return React.createElement('div',{style:{position:'relative',width:'100%',height:h,borderRadius:r,overflow:'hidden',background:stripes,border:'1px dashed '+(dark?'#364d72':'#C9D8EA'),display:'flex',alignItems:'center',justifyContent:'center'}},
+    React.createElement('span',{style:{fontFamily:'monospace',fontSize:12,fontWeight:600,color:dark?'#90A6C7':'#7C92B0',background:dark?'rgba(15,25,42,.55)':'rgba(255,255,255,.75)',padding:'6px 12px',borderRadius:8,letterSpacing:.3,textAlign:'center',maxWidth:'80%'}},label));
+}
+
+function PhotoCircle(props){
+  var size=props.size||96;
+  return React.createElement('div',{style:{width:size,height:size,borderRadius:'50%',margin:'0 auto',background:'repeating-linear-gradient(135deg,#EAF1FA 0,#EAF1FA 9px,#E0EAF6 9px,#E0EAF6 18px)',border:'1px dashed #C9D8EA',display:'flex',alignItems:'center',justifyContent:'center'}},
+    React.createElement('span',{style:{fontFamily:'monospace',fontSize:11,color:'#7C92B0'}},'photo'));
+}
+
+function eyebrow(txt,onDark){
+  return React.createElement('div',{style:{fontSize:13,fontWeight:800,letterSpacing:1.4,textTransform:'uppercase',color:onDark?'#6FB4F2':'#1E7FE5',marginBottom:12}},txt);
+}
+
+function srcLink(label,url,onDark){
+  return React.createElement('a',{href:url,target:'_blank',rel:'noopener noreferrer',style:{display:'inline-flex',alignItems:'center',gap:6,fontSize:12,fontWeight:700,color:onDark?'#9DB8DC':'#5A6B82',textDecoration:'none',cursor:'pointer',lineHeight:1.4}},
+    Icon('arrow',12,onDark?'#6FB4F2':'#1E7FE5'),
+    React.createElement('span',{style:{textDecoration:'underline',textUnderlineOffset:2}},'Source : '+label));
+}
+
+// ---------- HERO ----------
+function AboutHero(props){
+  const c=props.c;
+  const jump=[['about-team',"L'Équipe"],['about-need','Le Besoin'],['about-solution','La Solution'],['about-journey','Notre Parcours'],['about-future','Perspectives']];
+  return React.createElement('div',{id:'about-top',style:{position:'relative',overflow:'hidden',background:'linear-gradient(150deg,#15233B 0%,#19314F 52%,#11427C 100%)',color:'#fff'}},
+    React.createElement('div',{style:{position:'absolute',width:560,height:560,borderRadius:'50%',background:'rgba(91,176,245,.10)',top:-200,right:-140,zIndex:0}}),
+    React.createElement('div',{style:{position:'absolute',width:300,height:300,borderRadius:'50%',background:'rgba(91,176,245,.08)',bottom:-120,left:-80,zIndex:0}}),
+    React.createElement('div',{style:{maxWidth:1200,margin:'0 auto',padding:'92px 24px 60px',position:'relative',zIndex:1,display:'grid',gridTemplateColumns:'1.04fr .96fr',gap:52,alignItems:'center'}},
+      React.createElement('div',null,
+        React.createElement('div',{style:{display:'inline-flex',alignItems:'center',gap:8,background:'rgba(255,255,255,.12)',border:'1px solid rgba(255,255,255,.16)',padding:'7px 14px',borderRadius:30,fontSize:12.5,fontWeight:700,marginBottom:22}},Icon('drone',15,'#6FB4F2'),'PLBD · École Centrale Casablanca'),
+        React.createElement('h1',{style:{fontSize:46,lineHeight:1.08,fontWeight:800,letterSpacing:'-1px',margin:'0 0 18px'}},'Quand chaque minute compte, MediFly vole.'),
+        React.createElement('p',{style:{fontSize:17,lineHeight:1.6,color:'#C7D6EB',maxWidth:520,marginBottom:24}},'MediFly est un écosystème complet : un drone quadricoptère autonome et une plateforme digitale de commande de produits médicaux critiques — vaccins, poches de sang, antidotes, sérums antivenimeux — pour le Maroc et l’Afrique.'),
+        React.createElement('div',{style:{display:'flex',gap:14,marginBottom:30,flexWrap:'wrap'}},
+          React.createElement('button',{onClick:()=>c.go('home'),style:{border:'none',background:'#1E7FE5',color:'#fff',padding:'14px 24px',borderRadius:13,fontSize:15,fontWeight:700,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:9,boxShadow:'0 10px 26px rgba(30,127,229,.4)'}},Icon('cart',18,'#fff'),'Passer commande'),
+          React.createElement('button',{onClick:()=>aboutScrollTo('about-need'),style:{border:'1.5px solid rgba(255,255,255,.25)',background:'rgba(255,255,255,.06)',color:'#fff',padding:'14px 22px',borderRadius:13,fontSize:15,fontWeight:700,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:9}},'Découvrir le projet',Icon('chevron',17,'#fff'))),
+        React.createElement('div',{style:{display:'flex',flexWrap:'wrap',gap:8}},
+          jump.map(j=>React.createElement('span',{key:j[0],onClick:()=>aboutScrollTo(j[0]),style:{fontSize:12.5,fontWeight:700,color:'#AFC4E0',cursor:'pointer',padding:'7px 13px',borderRadius:20,border:'1px solid rgba(255,255,255,.14)'}},j[1])))),
+      React.createElement('div',null,
+        React.createElement(ImgSlot,{dark:true,h:380,r:22,label:'Render / photo : drone quadricoptère en vol au-dessus d’une carte topographique (Atlas marocain, zones rurales)'}))),
+    React.createElement('div',{style:{position:'relative',zIndex:1,borderTop:'1px solid rgba(255,255,255,.10)',background:'rgba(0,0,0,.14)'}},
+      React.createElement('div',{style:{maxWidth:1200,margin:'0 auto',padding:'16px 24px',display:'flex',flexWrap:'wrap',gap:'8px 28px',alignItems:'center',fontSize:13,color:'#AFC4E0'}},
+        React.createElement('span',{style:{fontWeight:800,color:'#fff'}},'Cadre académique'),
+        React.createElement('span',null,'Project Learning By Doing — thématique « Robotique & IA au service des enjeux africains »'),
+        React.createElement('span',{style:{width:5,height:5,borderRadius:'50%',background:'#5BB0F5'}}),
+        React.createElement('span',null,'Groupe PLBD 19'),
+        React.createElement('span',{style:{width:5,height:5,borderRadius:'50%',background:'#5BB0F5'}}),
+        React.createElement('span',null,'Encadrant : M. Adil Ahidar')))
+  );
+}
+
+// ---------- ÉQUIPE ----------
+function AboutTeam(props){
+  const c=props.c;
+  const members=['Bakayoko Mouhamed Soualiou','Tawba Benzayed','Abderrazak El Amrani','Mohammed El Atrassi','Idriss El Barkaki'];
+  const card=(name,role,note,accent)=>React.createElement('div',{key:name,style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:18,padding:'26px 18px 22px',textAlign:'center',boxShadow:'0 1px 2px rgba(21,35,59,.04)'}},
+    React.createElement(PhotoCircle,{size:96}),
+    React.createElement('div',{style:{fontSize:15.5,fontWeight:800,marginTop:15,lineHeight:1.3}},name),
+    React.createElement('div',{style:{fontSize:12.5,fontWeight:700,color:accent||'#1E7FE5',marginTop:6}},role),
+    note&&React.createElement('p',{style:{fontSize:12.5,color:'#5A6B82',lineHeight:1.5,marginTop:10}},note));
+  return React.createElement('div',{id:'about-team',style:{background:'#fff'}},
+    React.createElement('div',{style:{maxWidth:1200,margin:'0 auto',padding:'70px 24px'}},
+      eyebrow("L'Équipe"),
+      React.createElement('h2',{style:{fontSize:34,fontWeight:800,letterSpacing:'-.6px',marginBottom:8}},'Groupe PLBD 19'),
+      React.createElement('p',{style:{fontSize:15.5,color:'#5A6B82',maxWidth:640,marginBottom:36,lineHeight:1.6}},'Cinq élèves-ingénieurs de l’École Centrale Casablanca, encadrés par M. Adil Ahidar.'),
+      React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:18,marginBottom:24}},
+        members.map(m=>card(m,'Membre · Groupe PLBD 19'))),
+      React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:18}},
+        React.createElement('div',{style:{background:'#EAF4FD',border:'1px solid #CDE3FA',borderRadius:18,padding:'24px',display:'flex',gap:18,alignItems:'center'}},
+          React.createElement(PhotoCircle,{size:78}),
+          React.createElement('div',null,
+            React.createElement('div',{style:{fontSize:12,fontWeight:800,color:'#1E7FE5',textTransform:'uppercase',letterSpacing:.6,marginBottom:5}},'Encadrement académique'),
+            React.createElement('div',{style:{fontSize:18,fontWeight:800}},'M. Adil Ahidar'),
+            React.createElement('div',{style:{fontSize:13.5,color:'#4A5C73',marginTop:3}},'École Centrale Casablanca'))),
+        React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:18,padding:'24px',display:'flex',gap:18,alignItems:'center'}},
+          React.createElement(PhotoCircle,{size:78}),
+          React.createElement('div',null,
+            React.createElement('div',{style:{fontSize:12,fontWeight:800,color:'#9CADC2',textTransform:'uppercase',letterSpacing:.6,marginBottom:5}},'Contributeur'),
+            React.createElement('div',{style:{fontSize:18,fontWeight:800}},'Bastien Beille'),
+            React.createElement('div',{style:{fontSize:13,color:'#5A6B82',marginTop:5,lineHeight:1.5}},'A contribué de manière significative aux premières phases du projet avant de quitter l’École Centrale Casablanca.')))))
+  );
+}
+
+// ---------- LE BESOIN ----------
+function AboutNeed(props){
+  const big=[
+    {n:'25–40 %',d:'des vaccins gaspillés en Afrique à cause des ruptures de la chaîne du froid.',s:'BMJ Global Health (2022)',u:'https://gh.bmj.com/content/7/4/e009010'},
+    {n:'81 000 – 138 000',d:'décès par an dans le monde liés aux morsures de serpent, avec une concentration majeure en Afrique subsaharienne.',s:'OMS — Envenimation par morsure de serpent',u:'https://www.who.int/fr/news-room/fact-sheets/detail/snakebite-envenomation'},
+    {n:'34 %',d:'des usagers de centres de santé publics ne trouvent pas les médicaments essentiels lors de leurs visites.',s:'Mo Ibrahim Foundation / GeoPoll — Africa Survey 2022',u:'https://mo.ibrahim.foundation/sites/default/files/2022-05/2022-forum-report.pdf'},
+  ];
+  const ctx=[
+    {ic:'heart',t:'Mortalité maternelle en zones rurales',d:'Significativement plus élevée qu’en ville, en grande partie liée à l’impossibilité d’acheminer à temps des produits vitaux (sang, médicaments d’urgence).',s:'Banque Mondiale — Indicateurs de développement',u:'https://donnees.banquemondiale.org/'},
+    {ic:'pin',t:'Des structures de santé hors de portée',d:'Une large part de la population rurale vit loin de tout établissement, avec des routes impraticables plusieurs mois par an en saison des pluies.',s:'OMS — Couverture sanitaire universelle',u:'https://www.who.int/fr/news-room/fact-sheets/detail/universal-health-coverage-(uhc)'},
+    {ic:'pill',t:'Ruptures de stock chroniques',d:'Dans les cliniques de première ligne, elles affectent le traitement de maladies comme le paludisme ou le VIH.',s:'OMS / MSF — Accès aux médicaments essentiels',u:'https://www.who.int/fr/news-room/fact-sheets/detail/malaria'},
+  ];
+  return React.createElement('div',{id:'about-need',style:{background:'linear-gradient(160deg,#15233B 0%,#172B47 100%)',color:'#fff'}},
+    React.createElement('div',{style:{maxWidth:1200,margin:'0 auto',padding:'72px 24px'}},
+      eyebrow('Le Besoin',true),
+      React.createElement('h2',{style:{fontSize:34,fontWeight:800,letterSpacing:'-.6px',marginBottom:10}},'La distance ne devrait jamais être une fatalité'),
+      React.createElement('p',{style:{fontSize:15.5,color:'#AFC4E0',maxWidth:680,marginBottom:38,lineHeight:1.6}},'En Afrique, des produits médicaux vitaux n’arrivent pas à temps. Les chiffres, issus de sources institutionnelles, dessinent l’urgence.'),
+      React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:18,marginBottom:18}},
+        big.map((b,i)=>React.createElement('div',{key:i,style:{background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.10)',borderRadius:18,padding:'26px 22px',display:'flex',flexDirection:'column'}},
+          React.createElement('div',{style:{fontSize:40,fontWeight:800,letterSpacing:'-1px',color:'#6FC0FF',lineHeight:1.05,marginBottom:12}},b.n),
+          React.createElement('p',{style:{fontSize:14.5,color:'#D4E1F2',lineHeight:1.55,flex:1,marginBottom:16}},b.d),
+          srcLink(b.s,b.u,true)))),
+      React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:18,marginBottom:36}},
+        ctx.map((b,i)=>React.createElement('div',{key:i,style:{background:'rgba(255,255,255,.04)',border:'1px solid rgba(255,255,255,.09)',borderRadius:18,padding:'24px 22px'}},
+          React.createElement('span',{style:{width:44,height:44,borderRadius:12,background:'rgba(111,180,242,.16)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:14}},Icon(b.ic,23,'#6FB4F2')),
+          React.createElement('div',{style:{fontSize:16,fontWeight:800,marginBottom:9,lineHeight:1.3}},b.t),
+          React.createElement('p',{style:{fontSize:13.5,color:'#B9C9E0',lineHeight:1.55,marginBottom:15}},b.d),
+          srcLink(b.s,b.u,true)))),
+      React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1.1fr',gap:30,alignItems:'center',background:'rgba(255,255,255,.04)',border:'1px solid rgba(255,255,255,.09)',borderRadius:20,padding:24}},
+        React.createElement(ImgSlot,{dark:true,h:230,r:14,label:'Photo : relief montagneux de l’Atlas / zone rurale enclavée'}),
+        React.createElement('div',null,
+          React.createElement('div',{style:{fontSize:13,fontWeight:800,color:'#6FB4F2',textTransform:'uppercase',letterSpacing:.8,marginBottom:10}},'Un terrain hostile aux solutions terrestres'),
+          React.createElement('p',{style:{fontSize:15,color:'#D4E1F2',lineHeight:1.65,marginBottom:14}},'Relief montagneux, déserts, forêts denses et réseaux fluviaux : autant d’obstacles qui isolent les populations et rendent la livraison routière lente, coûteuse, parfois impossible.'),
+          React.createElement('div',{style:{display:'flex',flexWrap:'wrap',gap:9}},
+            ['Atlas marocain','Déserts','Forêts denses','Réseaux fluviaux'].map(t=>React.createElement('span',{key:t,style:{fontSize:12.5,fontWeight:700,color:'#CFE0F4',background:'rgba(255,255,255,.07)',padding:'7px 13px',borderRadius:20}},t))))))
+  );
+}
+
+// ---------- LA SOLUTION ----------
+function AboutSolution(props){
+  const specs=[
+    ['box','Châssis','Quadricoptère S500 imprimé en 3D · 480 mm d’envergure'],
+    ['drone','Motorisation','4 moteurs brushless A2212 1400KV · ESC 30A'],
+    ['battery','Énergie','Batterie LiPo 3S · 11,1 V'],
+    ['gauge','Contrôle de vol','Contrôleur custom sur ESP32 · IMU MPU6050'],
+  ];
+  const demandeur=['Catalogue de produits médicaux','Panier et commande avec note','Suivi du vol en temps réel','Historique des livraisons'];
+  const fournisseur=['Tableau de bord des commandes','Confirmation des demandes','Données de vol du drone en temps réel','Historique des missions'];
+  const card=(title,ic,role,items,col)=>React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:18,padding:24,flex:1}},
+    React.createElement('div',{style:{display:'flex',alignItems:'center',gap:12,marginBottom:16}},
+      React.createElement('span',{style:{width:44,height:44,borderRadius:12,background:col+'18',display:'flex',alignItems:'center',justifyContent:'center'}},Icon(ic,23,col)),
+      React.createElement('div',null,React.createElement('div',{style:{fontSize:12,fontWeight:800,color:'#9CADC2',textTransform:'uppercase',letterSpacing:.5}},role),React.createElement('div',{style:{fontSize:17,fontWeight:800}},title))),
+    React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:11}},
+      items.map(t=>React.createElement('div',{key:t,style:{display:'flex',gap:10,alignItems:'center',fontSize:14,color:'#3A4A60',fontWeight:600}},React.createElement('span',{style:{flexShrink:0,width:22,height:22,borderRadius:'50%',background:col+'18',display:'flex',alignItems:'center',justifyContent:'center'}},Icon('check',13,col)),t))));
+  return React.createElement('div',{id:'about-solution',style:{background:'#F2F8FE'}},
+    React.createElement('div',{style:{maxWidth:1200,margin:'0 auto',padding:'72px 24px'}},
+      eyebrow('La Solution'),
+      React.createElement('h2',{style:{fontSize:34,fontWeight:800,letterSpacing:'-.6px',marginBottom:8}},'Un drone autonome et une plateforme intelligente'),
+      React.createElement('p',{style:{fontSize:15.5,color:'#5A6B82',maxWidth:680,marginBottom:40,lineHeight:1.6}},'MediFly combine un aéronef conçu pour le transport médical sécurisé et un écosystème digital reliant demandeurs et fournisseurs de produits de santé.'),
+      // Drone
+      React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1.05fr',gap:36,alignItems:'center',marginBottom:50}},
+        React.createElement(ImgSlot,{h:360,r:20,label:'Photo : drone S500 assemblé / render 3D du quadricoptère'}),
+        React.createElement('div',null,
+          React.createElement('div',{style:{fontSize:13,fontWeight:800,color:'#1E7FE5',textTransform:'uppercase',letterSpacing:.8,marginBottom:10}},'Le drone quadricoptère'),
+          React.createElement('h3',{style:{fontSize:24,fontWeight:800,letterSpacing:'-.4px',marginBottom:18}},'Prototype S500'),
+          React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:18}},
+            specs.map((s,i)=>React.createElement('div',{key:i,style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:14,padding:'15px 16px'}},
+              React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:7}},Icon(s[0],17,'#1565D8'),React.createElement('span',{style:{fontSize:12,fontWeight:800,color:'#9CADC2',textTransform:'uppercase',letterSpacing:.4}},s[1])),
+              React.createElement('div',{style:{fontSize:13.5,fontWeight:700,color:'#15233B',lineHeight:1.4}},s[2])))),
+          React.createElement('div',{style:{background:'#EAF4FD',border:'1px solid #CDE3FA',borderRadius:14,padding:'16px 18px',display:'flex',gap:12,alignItems:'flex-start'}},
+            React.createElement('span',{style:{flexShrink:0,width:36,height:36,borderRadius:10,background:'#1E7FE5',display:'flex',alignItems:'center',justifyContent:'center'}},Icon('box',19,'#fff')),
+            React.createElement('div',null,React.createElement('div',{style:{fontSize:14,fontWeight:800,marginBottom:3}},'Payload sécurisé'),React.createElement('div',{style:{fontSize:13,color:'#3A4A60',lineHeight:1.5}},'Box protégé contre les chocs, vibrations et variations thermiques. Libération commandée à l’atterrissage par signal du contrôleur de vol.'))))),
+      // Écosystème digital
+      React.createElement('div',{style:{fontSize:13,fontWeight:800,color:'#1E7FE5',textTransform:'uppercase',letterSpacing:.8,marginBottom:10}},'L’écosystème digital — plateforme MediFly'),
+      React.createElement('div',{style:{background:'#FFF7E8',border:'1px solid #F3D9A0',borderRadius:14,padding:'14px 18px',display:'flex',gap:12,alignItems:'center',marginBottom:24}},
+        React.createElement('span',{style:{flexShrink:0,width:34,height:34,borderRadius:'50%',background:'#E08600',display:'flex',alignItems:'center',justifyContent:'center'}},Icon('bolt',18,'#fff')),
+        React.createElement('div',{style:{fontSize:13,color:'#7A5200',lineHeight:1.5}},React.createElement('b',null,'Note de développement : '),'le site vitrine présente la plateforme à titre informatif. Le code de l’application de commande et de gestion des livraisons (interfaces demandeur et fournisseur) ne sera pas redéveloppé dans ce projet.')),
+      React.createElement('div',{style:{display:'flex',gap:18,marginBottom:24,alignItems:'stretch'}},
+        card('Interface Demandeur','user','Hôpitaux · CHU · pharmacies · dispensaires · centres de vaccination',demandeur,'#1E7FE5'),
+        card('Interface Fournisseur','building','Banques de sang · grossistes pharmaceutiques',fournisseur,'#E08600')),
+      React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:18}},
+        React.createElement('div',{style:{background:'#15233B',color:'#fff',borderRadius:18,padding:'24px',display:'flex',gap:16,alignItems:'flex-start'}},
+          React.createElement('span',{style:{flexShrink:0,width:46,height:46,borderRadius:12,background:'rgba(111,180,242,.18)',display:'flex',alignItems:'center',justifyContent:'center'}},Icon('gauge',24,'#6FB4F2')),
+          React.createElement('div',null,
+            React.createElement('div',{style:{fontSize:17,fontWeight:800,marginBottom:7}},'L’IA embarquée'),
+            React.createElement('p',{style:{fontSize:14,color:'#C7D6EB',lineHeight:1.6,marginBottom:12}},'L’algorithme classe et ordonne les missions selon le niveau de criticité de la demande.'),
+            React.createElement('div',{style:{display:'flex',flexWrap:'wrap',gap:8}},
+              ['Urgence vitale','Rupture de stock','Demande standard'].map(t=>React.createElement('span',{key:t,style:{fontSize:12,fontWeight:700,color:'#CFE0F4',background:'rgba(255,255,255,.08)',padding:'6px 12px',borderRadius:20}},t))))),
+        React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:18,padding:'24px',display:'flex',gap:16,alignItems:'flex-start'}},
+          React.createElement('span',{style:{flexShrink:0,width:46,height:46,borderRadius:12,background:'#EAF4FD',display:'flex',alignItems:'center',justifyContent:'center'}},Icon('id',24,'#1565D8')),
+          React.createElement('div',null,
+            React.createElement('div',{style:{fontSize:17,fontWeight:800,marginBottom:7}},'Authentification INPE'),
+            React.createElement('p',{style:{fontSize:14,color:'#5A6B82',lineHeight:1.6}},'Accès sécurisé par numéro INPE — l’Identifiant National des Professionnels et Établissements de Santé du système marocain.')))))
+  );
+}
+
+// ---------- NOTRE PARCOURS ----------
+function AboutJourney(props){
+  const phases=[
+    {p:'Phase 1',t:'Étude & cadrage',d:'Étude de marché, analyse du besoin logistique, état de l’art technologique, enquête citoyenne et cartographie des acteurs.'},
+    {p:'Phase 2',t:'Conception du drone',d:'Dimensionnement mécanique du quadricoptère, choix de l’architecture électronique (ESP32, IMU MPU6050, ESC 30A) et analyse fonctionnelle (diagramme Pieuvre, FAST, blocs).'},
+    {p:'Phase 3',t:'Plateforme digitale',d:'Développement de la plateforme MediFly : architecture applicative, interfaces demandeur et fournisseur, algorithmes de suivi et de priorisation.'},
+    {p:'Phase 4',t:'Prototypage & autonomisation',d:'Prototypage physique du drone S500, assemblage, tests ESC, intégration des capteurs, simulations de vol et validation en conditions réelles.',auto:['Contrôle manuel via manette PS4','Transmission capteurs + flux vidéo + planification IA de trajectoire','Missions entièrement autonomes']},
+  ];
+  return React.createElement('div',{id:'about-journey',style:{background:'linear-gradient(160deg,#15233B 0%,#172B47 100%)',color:'#fff'}},
+    React.createElement('div',{style:{maxWidth:1080,margin:'0 auto',padding:'72px 24px'}},
+      eyebrow('Notre Parcours',true),
+      React.createElement('h2',{style:{fontSize:34,fontWeight:800,letterSpacing:'-.6px',marginBottom:40}},'De l’étude au vol autonome'),
+      React.createElement('div',null,
+        phases.map((ph,i)=>React.createElement('div',{key:i,style:{display:'flex',gap:24,paddingBottom:i<phases.length-1?34:0,position:'relative'}},
+          i<phases.length-1&&React.createElement('div',{style:{position:'absolute',left:25,top:54,bottom:0,width:2,background:'rgba(111,180,242,.25)'}}),
+          React.createElement('div',{style:{flexShrink:0,width:52,height:52,borderRadius:14,background:'#1E7FE5',display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,fontWeight:800,zIndex:1,boxShadow:'0 8px 20px rgba(30,127,229,.35)'}},'0'+(i+1)),
+          React.createElement('div',{style:{flex:1,background:'rgba(255,255,255,.04)',border:'1px solid rgba(255,255,255,.09)',borderRadius:16,padding:'20px 24px'}},
+            React.createElement('div',{style:{fontSize:12.5,fontWeight:800,color:'#6FB4F2',textTransform:'uppercase',letterSpacing:.6,marginBottom:5}},ph.p),
+            React.createElement('div',{style:{fontSize:19,fontWeight:800,marginBottom:9}},ph.t),
+            React.createElement('p',{style:{fontSize:14.5,color:'#C7D6EB',lineHeight:1.6}},ph.d),
+            ph.auto&&React.createElement('div',{style:{marginTop:16,display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10}},
+              ph.auto.map((a,j)=>React.createElement('div',{key:j,style:{background:'rgba(111,180,242,.10)',border:'1px solid rgba(111,180,242,.22)',borderRadius:12,padding:'12px 14px'}},
+                React.createElement('div',{style:{fontSize:11.5,fontWeight:800,color:'#6FB4F2',marginBottom:5}},'Autonomie · '+(j+1)),
+                React.createElement('div',{style:{fontSize:12.5,color:'#D4E1F2',lineHeight:1.45,fontWeight:600}},a)))))))))
+  );
+}
+
+// ---------- PERSPECTIVES ----------
+function AboutFuture(props){
+  const items=[
+    {ic:'box',t:'Conditionnement thermique',d:'Conception d’un box de transport adapté aux contraintes strictes : vaccins +2 °C/+8 °C, poches de sang, sérums — isolation passive ou active selon le produit.'},
+    {ic:'drone',t:'Passage au VTOL',d:'Évolution vers un drone à décollage et atterrissage vertical avec voilure fixe pour la croisière, afin d’augmenter l’autonomie et la portée sur de longues distances.'},
+    {ic:'user',t:'Intégration des particuliers',d:'Élargir la base d’utilisateurs aux individus — patients, personnes à mobilité réduite — en plus des structures de santé institutionnelles.'},
+    {ic:'pin',t:'Expansion en Afrique',d:'Déployer le modèle dans d’autres pays confrontés aux mêmes défis : zones rurales enclavées, ruptures de chaîne du froid, urgences médicales sous-desservies.'},
+  ];
+  return React.createElement('div',{id:'about-future',style:{background:'#fff'}},
+    React.createElement('div',{style:{maxWidth:1200,margin:'0 auto',padding:'72px 24px'}},
+      eyebrow('Perspectives Futures'),
+      React.createElement('h2',{style:{fontSize:34,fontWeight:800,letterSpacing:'-.6px',marginBottom:8}},'La suite du projet'),
+      React.createElement('p',{style:{fontSize:15.5,color:'#5A6B82',maxWidth:640,marginBottom:38,lineHeight:1.6}},'Quatre axes pour passer du prototype à un service déployable à l’échelle du continent.'),
+      React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:18}},
+        items.map((b,i)=>React.createElement('div',{key:i,style:{background:'#F2F8FE',border:'1px solid #E2EAF2',borderRadius:18,padding:'26px 24px',display:'flex',gap:18}},
+          React.createElement('span',{style:{flexShrink:0,width:50,height:50,borderRadius:13,background:'#fff',border:'1px solid #DCE7F3',display:'flex',alignItems:'center',justifyContent:'center'}},Icon(b.ic,25,'#1565D8')),
+          React.createElement('div',null,
+            React.createElement('div',{style:{fontSize:17,fontWeight:800,marginBottom:8}},b.t),
+            React.createElement('p',{style:{fontSize:14,color:'#4A5C73',lineHeight:1.6}},b.d))))))
+  );
+}
+
+// ---------- CTA FINALE ----------
+function AboutCTA(props){
+  const c=props.c;
+  return React.createElement('div',{style:{background:'linear-gradient(120deg,#1E7FE5 0%,#1565D8 60%,#0F4FB0 100%)',color:'#fff'}},
+    React.createElement('div',{style:{maxWidth:1000,margin:'0 auto',padding:'58px 24px',textAlign:'center'}},
+      React.createElement('h2',{style:{fontSize:32,fontWeight:800,letterSpacing:'-.6px',marginBottom:12}},'Un besoin médical urgent ?'),
+      React.createElement('p',{style:{fontSize:16,color:'#DCEBFB',maxWidth:520,margin:'0 auto 26px',lineHeight:1.6}},'Accédez au catalogue, composez votre commande et suivez le drone en temps réel.'),
+      React.createElement('button',{onClick:()=>c.go('home'),style:{border:'none',background:'#fff',color:'#1565D8',padding:'15px 30px',borderRadius:14,fontSize:16,fontWeight:800,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:10,boxShadow:'0 12px 30px rgba(0,0,0,.18)'}},Icon('cart',19,'#1565D8'),'Passer commande',Icon('arrow',19,'#1565D8'))))
+}
+
+// ---------- ABOUT ROOT ----------
+function AboutScreen(props){
+  const c=props.c;
+  return React.createElement('div',null,
+    React.createElement(AboutHero,{c}),
+    React.createElement(AboutTeam,{c}),
+    React.createElement(AboutNeed,{c}),
+    React.createElement(AboutSolution,{c}),
+    React.createElement(AboutJourney,{c}),
+    React.createElement(AboutFuture,{c}),
+    React.createElement(AboutCTA,{c}));
+}
+
+// ============== DISCOVER BUTTON (pill + drone sweep) ==============
+class DiscoverButton extends React.Component{
+  constructor(p){super(p);this.state={h:false};}
+  render(){
+    const c=this.props.c,h=this.state.h;
+    return React.createElement('button',{onMouseEnter:()=>this.setState({h:true}),onMouseLeave:()=>this.setState({h:false}),onClick:()=>c.go('about'),
+      style:{position:'relative',overflow:'hidden',border:'none',cursor:'pointer',borderRadius:30,height:42,padding:0,minWidth:196,background:'#0A2540',boxShadow:h?'0 8px 20px rgba(30,127,229,.4)':'0 4px 12px rgba(10,37,64,.4)',transition:'box-shadow .4s'}},
+      React.createElement('span',{style:{position:'absolute',top:0,left:0,height:'100%',width:h?'100%':'0%',background:'linear-gradient(90deg,#1565D8,#1E7FE5)',transition:'width .65s cubic-bezier(.45,0,.2,1)',zIndex:0}}),
+      React.createElement('span',{style:{position:'absolute',top:'50%',left:h?'calc(100% - 30px)':'10px',transform:'translateY(-50%)',transition:'left .65s cubic-bezier(.45,0,.2,1)',zIndex:2,display:'flex',filter:h?'drop-shadow(0 2px 5px rgba(0,0,0,.3))':'none'}},Icon('drone',19,'#fff')),
+      React.createElement('span',{style:{position:'relative',zIndex:2,display:'flex',alignItems:'center',height:'100%',paddingLeft:34,paddingRight:18,color:'#fff',fontWeight:800,fontSize:14,letterSpacing:.2,whiteSpace:'nowrap',transition:'color .35s .18s'}},'Découvrir MediFly'));
+  }
+}
+
+// ============== ORDER PILL (Wing-inspired) ==============
+class OrderPill extends React.Component{
+  constructor(p){super(p);this.state={h:false};}
+  render(){
+    const c=this.props.c,h=this.state.h;
+    return React.createElement('button',{onMouseEnter:()=>this.setState({h:true}),onMouseLeave:()=>this.setState({h:false}),onClick:()=>c.go('home'),
+      style:{position:'relative',overflow:'hidden',border:'none',cursor:'pointer',borderRadius:30,height:44,padding:0,minWidth:200,flexShrink:0,background:'#1E7FE5',boxShadow:h?'0 9px 22px rgba(10,37,64,.5)':'0 4px 12px rgba(30,127,229,.42)',transition:'box-shadow .4s'}},
+      React.createElement('span',{style:{position:'absolute',top:0,left:0,height:'100%',width:h?'100%':'0%',background:'linear-gradient(90deg,#0A2540,#11335C)',transition:'width .65s cubic-bezier(.45,0,.2,1)',zIndex:0}}),
+      React.createElement('span',{style:{position:'absolute',top:'50%',left:h?'calc(100% - 30px)':'12px',transform:'translateY(-50%)',transition:'left .65s cubic-bezier(.45,0,.2,1)',zIndex:2,display:'flex',filter:h?'drop-shadow(0 2px 5px rgba(0,0,0,.3))':'none'}},Icon('drone',19,'#fff')),
+      React.createElement('span',{style:{position:'relative',zIndex:2,display:'flex',alignItems:'center',height:'100%',paddingLeft:36,paddingRight:20,color:'#fff',fontWeight:800,fontSize:14.5,letterSpacing:.2,whiteSpace:'nowrap',transition:'color .35s .18s'}},'Passer commande'));
+  }
+}
+
+// ============== ABOUT HEADER (discover mode top bar) ==============
+function AboutHeader(props){
+  const c=props.c;
+  const links=[['about-team',"L'Équipe"],['about-need','Le Besoin'],['about-solution','La Solution'],['about-journey','Notre Parcours'],['about-future','Perspectives']];
+  const link=(id,label)=>React.createElement('span',{key:id,onClick:()=>aboutScrollTo(id),style:{fontSize:14.5,fontWeight:700,color:'#DCE7F4',cursor:'pointer',whiteSpace:'nowrap'}},label);
+  return React.createElement('div',{style:{position:'sticky',top:0,zIndex:200,padding:'14px 18px',pointerEvents:'none'}},
+    React.createElement('div',{style:{maxWidth:1200,margin:'0 auto',background:'rgba(18,30,50,.55)',backdropFilter:'blur(14px)',WebkitBackdropFilter:'blur(14px)',border:'1px solid rgba(255,255,255,.10)',borderRadius:44,padding:'9px 9px 9px 18px',display:'flex',alignItems:'center',gap:20,boxShadow:'0 14px 38px rgba(10,20,40,.3)',pointerEvents:'auto'}},
+      React.createElement('div',{onClick:()=>aboutScrollTo('about-top'),style:{cursor:'pointer',background:'#fff',borderRadius:12,padding:'6px 12px',display:'flex',flexShrink:0}},React.createElement(Logo,{h:24})),
+      React.createElement('nav',{style:{display:'flex',gap:26,alignItems:'center',flex:1,justifyContent:'center'}},links.map(l=>link(l[0],l[1]))),
+      React.createElement(OrderPill,{c})));
+}
+</script>
+</body>
+</html>
