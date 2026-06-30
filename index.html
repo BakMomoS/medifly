@@ -860,11 +860,13 @@ function RealMap(props){
       if(!L || !elRef.current){ setTimeout(init,150); return; }
       if(ref.current.map) return;
       const map=L.map(elRef.current,{zoomControl:false,attributionControl:false,scrollWheelZoom:false,doubleClickZoom:false}).setView([(A[0]+B[0])/2,(A[1]+B[1])/2],16);
-      // Imagerie satellite haute résolution (Esri World Imagery) — pas de clé API
-      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'Tiles © Esri'}).addTo(map);
-      // Overlay labels (rues, lieux) pour garder la lisibilité
-      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,opacity:.9,attribution:''}).addTo(map);
-      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,opacity:.85,attribution:''}).addTo(map);
+      // Google Maps — vue hybride (satellite + routes/labels) en français
+      // Codes lyrs : m=plan, s=satellite, y=hybride, p=relief, h=labels seuls
+      L.tileLayer('https://{s}.google.com/vt/lyrs=y&hl=fr&x={x}&y={y}&z={z}',{
+        maxZoom:20,
+        subdomains:['mt0','mt1','mt2','mt3'],
+        attribution:'© Google'
+      }).addTo(map);
       ref.current.done=L.polyline([A],{color:'#1E7FE5',weight:4,opacity:.95}).addTo(map);
       ref.current.todo=L.polyline([A,B],{color:'#7FB1E8',weight:3,opacity:.85,dashArray:'3 9'}).addTo(map);
       L.marker(A,{icon:L.divIcon({className:'',iconSize:[18,18],iconAnchor:[9,9],html:'<div style="width:16px;height:16px;border-radius:50%;background:#1565D8;border:3px solid #fff;box-shadow:0 2px 6px rgba(21,35,59,.4)"></div>'})}).addTo(map).bindTooltip('Dépôt CRTS',{permanent:true,direction:'left',className:'mf-tip',offset:[-8,0]});
@@ -955,7 +957,21 @@ function Telemetry(props){
       cell('drone','Attitude (R/P)',t.roll+'° / '+t.pitch,'°','#7A5BD6'),
       React.createElement('div',{style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:14,padding:'14px 16px'}},
         React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,fontSize:12,color:'#5A6B82',fontWeight:600,marginBottom:8}},Icon(bm==='descending'?'down':bm==='ascending'?'up':'box',16,bmCol),'Treuil / box'),
-        React.createElement('div',{style:{fontSize:18,fontWeight:800,color:bmCol,display:'flex',alignItems:'center',gap:6}},bmLbl,bm!=='idle'&&React.createElement('span',{style:{width:8,height:8,borderRadius:'50%',background:bmCol,animation:'mfblink 1s infinite'}})))));
+        React.createElement('div',{style:{fontSize:18,fontWeight:800,color:bmCol,display:'flex',alignItems:'center',gap:6}},bmLbl,bm!=='idle'&&React.createElement('span',{style:{width:8,height:8,borderRadius:'50%',background:bmCol,animation:'mfblink 1s infinite'}}))),
+      // Position GPS — pleine largeur, en bas de la grille
+      React.createElement('div',{style:{gridColumn:'1 / -1',background:'#fff',border:'1px solid #EAF0F7',borderRadius:14,padding:'14px 16px'}},
+        React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,fontSize:12,color:'#5A6B82',fontWeight:600,marginBottom:10}},
+          Icon('pin',16,'#1565D8'),'Position GPS (NEO-6M)',
+          React.createElement('span',{style:{marginLeft:'auto',display:'inline-flex',alignItems:'center',gap:5,fontSize:11,fontWeight:800,color:t.gpsFix?'#1FA97A':'#9CADC2',background:t.gpsFix?'#E2F0DD':'#EEF2F7',padding:'3px 9px',borderRadius:14}},
+            React.createElement('span',{style:{width:6,height:6,borderRadius:'50%',background:t.gpsFix?'#1FA97A':'#9CADC2',animation:t.gpsFix?'mfblink 1.2s infinite':'none'}}),
+            t.gpsFix?'FIX':'NO FIX')),
+        React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}},
+          React.createElement('div',null,
+            React.createElement('div',{style:{fontSize:11,color:'#9CADC2',fontWeight:700,letterSpacing:.4,marginBottom:3}},'LATITUDE'),
+            React.createElement('div',{style:{fontSize:19,fontWeight:800,fontFamily:'monospace',color:'#15233B'}},t.lat,React.createElement('span',{style:{fontSize:12,fontWeight:700,color:'#9CADC2',marginLeft:3}},'°'))),
+          React.createElement('div',null,
+            React.createElement('div',{style:{fontSize:11,color:'#9CADC2',fontWeight:700,letterSpacing:.4,marginBottom:3}},'LONGITUDE'),
+            React.createElement('div',{style:{fontSize:19,fontWeight:800,fontFamily:'monospace',color:'#15233B'}},t.lon,React.createElement('span',{style:{fontSize:12,fontWeight:700,color:'#9CADC2',marginLeft:3}},'°')))))));
 }
 
 // bouton de connexion USB au firmware (Web Serial)
