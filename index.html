@@ -1233,7 +1233,7 @@ function srcLink(label,url,onDark){
 // ---------- HERO ----------
 function AboutHero(props){
   const c=props.c;
-  const jump=[['about-team',"L'Équipe"],['about-need','Le Besoin'],['about-solution','La Solution'],['about-journey','Notre Parcours'],['about-future','Perspectives']];
+  const jump=[['about-team',"L'Équipe"],['about-need','Le Besoin'],['about-solution','La Solution'],['about-journey','Notre Parcours'],['about-difficulties','Difficultés'],['about-future','Perspectives']];
   // Bouton retour vers l'espace d'origine (fournisseur / demandeur / connexion)
   const ri=c.state.returnIface;
   const goBack=function(){
@@ -1401,16 +1401,25 @@ function AboutSolution(props){
 
 // ---------- NOTRE PARCOURS ----------
 function AboutJourney(props){
+  // Phases inspirées du rapport final PLBD 19 (juin 2026), enrichies par la démarche
+  // de validation incrémentale en 5 étapes décrite section 8.4.
   const phases=[
-    {p:'Phase 1',t:'Étude & cadrage',d:'Étude de marché, analyse du besoin logistique, état de l’art technologique, enquête citoyenne et cartographie des acteurs.'},
-    {p:'Phase 2',t:'Conception du drone',d:'Dimensionnement mécanique du quadricoptère, choix de l’architecture électronique (ESP32, IMU MPU6050, ESC 30A) et analyse fonctionnelle (diagramme Pieuvre, FAST, blocs).'},
-    {p:'Phase 3',t:'Plateforme digitale',d:'Développement de la plateforme MediFly : architecture applicative, interfaces demandeur et fournisseur, algorithmes de suivi et de priorisation.'},
-    {p:'Phase 4',t:'Prototypage & autonomisation',d:'Prototypage physique du drone S500, assemblage, tests ESC, intégration des capteurs, simulations de vol et validation en conditions réelles.',auto:['Contrôle manuel via manette PS4','Transmission capteurs + flux vidéo + planification IA de trajectoire','Missions entièrement autonomes']},
+    {p:'Phase 1',t:'Étude & cadrage',d:'Étude de marché, analyse du besoin logistique, état de l’art technologique (Zipline, Matternet, Wing), enquête citoyenne sur l’accès aux médicaments en Afrique et cartographie des parties prenantes.'},
+    {p:'Phase 2',t:'Conception du drone',d:'Dimensionnement mécanique du quadricoptère S500 (480 mm, configuration X), choix de l’architecture électronique (ESP32 DevKit V1, IMU MPU6050, BMP280, GPS NEO-6M, 4 moteurs A2212 1400 KV, ESC 30A) et analyse fonctionnelle (diagramme Pieuvre, tableau des fonctions).'},
+    {p:'Phase 3',t:'Plateforme numérique',d:'Développement de la plateforme MediFly : interfaces demandeur (catalogue, panier, suivi) et fournisseur (tableau de bord, confirmation, télémétrie live), avec l’algorithme de priorisation des commandes basé sur un score d’urgence médicale.'},
+    {p:'Phase 4',t:'Prototypage & validation incrémentale',d:'Conformément à une approche rigoureuse de gestion des risques, la validation du drone s’est faite en cinq étapes progressives — chaque étape ne s’engage qu’après la validation de la précédente.',steps:[
+      {t:'Étape 1 — Lecture MPU6050 seule',d:'Vérification de la lecture des angles de roulis et de tangage via I²C, calibration des offsets accélérométrique et gyroscopique.'},
+      {t:'Étape 2 — Moteurs + Bluepad32 sans PID',d:'Confirmation de la commande Bluetooth depuis la manette PS4, validation du mixage en X, vérification des sens de rotation et calibration des ESC.'},
+      {t:'Étape 3 — Test PID sur banc sans hélices',d:'Validation de la boucle de stabilisation sur support articulé, réglage itératif des gains Kp, Ki, Kd axe par axe.'},
+      {t:'Étape 4 — Vol attaché',d:'Premier vol complet avec hélices, le drone sécurisé par des cordes — validation de la réponse PID en charge.'},
+      {t:'Étape 5 — Vol libre',d:'Vol en espace dégagé, hover stationnaire et tests de manœuvrabilité — premier vol non contraint du prototype MediFly.'},
+    ]},
   ];
   return React.createElement('div',{id:'about-journey',style:{background:'linear-gradient(160deg,#15233B 0%,#172B47 100%)',color:'#fff'}},
     React.createElement('div',{style:{maxWidth:1080,margin:'0 auto',padding:'72px 24px'}},
       eyebrow('Notre Parcours',true),
-      React.createElement('h2',{style:{fontSize:34,fontWeight:800,letterSpacing:'-.6px',marginBottom:40}},'De l’étude au vol autonome'),
+      React.createElement('h2',{style:{fontSize:34,fontWeight:800,letterSpacing:'-.6px',marginBottom:14}},'De l’étude au vol libre'),
+      React.createElement('p',{style:{fontSize:15.5,color:'#AFC4E0',maxWidth:680,marginBottom:40,lineHeight:1.6}},'Notre démarche, structurée en quatre phases, se distingue par une validation incrémentale du prototype en cinq étapes — chacune ne s’engageant qu’après la précédente.'),
       React.createElement('div',null,
         phases.map((ph,i)=>React.createElement('div',{key:i,style:{display:'flex',gap:24,paddingBottom:i<phases.length-1?34:0,position:'relative'}},
           i<phases.length-1&&React.createElement('div',{style:{position:'absolute',left:25,top:54,bottom:0,width:2,background:'rgba(111,180,242,.25)'}}),
@@ -1419,10 +1428,43 @@ function AboutJourney(props){
             React.createElement('div',{style:{fontSize:12.5,fontWeight:800,color:'#6FB4F2',textTransform:'uppercase',letterSpacing:.6,marginBottom:5}},ph.p),
             React.createElement('div',{style:{fontSize:19,fontWeight:800,marginBottom:9}},ph.t),
             React.createElement('p',{style:{fontSize:14.5,color:'#C7D6EB',lineHeight:1.6}},ph.d),
-            ph.auto&&React.createElement('div',{style:{marginTop:16,display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10}},
-              ph.auto.map((a,j)=>React.createElement('div',{key:j,style:{background:'rgba(111,180,242,.10)',border:'1px solid rgba(111,180,242,.22)',borderRadius:12,padding:'12px 14px'}},
-                React.createElement('div',{style:{fontSize:11.5,fontWeight:800,color:'#6FB4F2',marginBottom:5}},'Autonomie · '+(j+1)),
-                React.createElement('div',{style:{fontSize:12.5,color:'#D4E1F2',lineHeight:1.45,fontWeight:600}},a)))))))))
+            ph.steps&&React.createElement('div',{style:{marginTop:18,display:'flex',flexDirection:'column',gap:10}},
+              ph.steps.map((s,j)=>React.createElement('div',{key:j,style:{background:'rgba(111,180,242,.10)',border:'1px solid rgba(111,180,242,.22)',borderRadius:12,padding:'14px 16px',display:'flex',gap:14,alignItems:'flex-start'}},
+                React.createElement('span',{style:{flexShrink:0,width:30,height:30,borderRadius:9,background:'rgba(30,127,229,.35)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,fontWeight:800,color:'#fff'}},j+1),
+                React.createElement('div',null,
+                  React.createElement('div',{style:{fontSize:13.5,fontWeight:800,color:'#fff',marginBottom:4}},s.t),
+                  React.createElement('div',{style:{fontSize:12.5,color:'#C7D6EB',lineHeight:1.55,fontWeight:500}},s.d)))))))))))
+  );
+}
+
+// ---------- DIFFICULTÉS RENCONTRÉES ----------
+function AboutDifficulties(props){
+  // Source : rapport final PLBD 19 (juin 2026), section 9.2.
+  const diffs=[
+    {ic:'box',t:'Disponibilité des composants',d:"Le prix élevé des radiocommandes et contrôleurs de vol conventionnels nous a obligés à concevoir une architecture alternative — ESP32 DevKit V1 + manette PS4 via Bluepad32 — au lieu d'un Pixhawk ou d'une SpeedyBee, hors budget. Un vrai défi technique, mais qui rend la solution plus accessible à long terme.",col:'#E5484D'},
+    {ic:'gauge',t:'Incompatibilité de bibliothèques',d:"La contrainte d'utiliser l'Arduino Core 2.x (imposée par Bluepad32) nous a forcés à n'utiliser que l'API LEDC v2.x et à abandonner la bibliothèque ESP32Servo, source de conflits de timers PWM.",col:'#E08600'},
+    {ic:'signal',t:'Conflits de broches I²C',d:"Les GPIO 21 et 22 étant déjà occupés par les sorties PWM des ESC, le MPU6050 a dû être remappé sur les GPIO 25 et 26 pour libérer le bus I²C — une réorganisation complète du brochage embarqué.",col:'#1565D8'},
+    {ic:'drone',t:'Complexité du réglage PID',d:"Régler une boucle PID sur des moteurs brushless sans capteur de référence externe est une tâche exigeante : chaque session de débogage demandait plusieurs dizaines d'itérations pour stabiliser le drone sur les trois axes.",col:'#7A5BD6'},
+    {ic:'bolt',t:'Destruction de pièces',d:"De nombreuses pièces se sont cassées ou grillées pendant le prototypage : deux bras, un pied, un ESP32 et deux hélices. Chaque casse était l'occasion d'identifier une erreur de réglage ou de procédure et de progresser.",col:'#9B2C30'},
+  ];
+  return React.createElement('div',{id:'about-difficulties',style:{background:'#F2F8FE'}},
+    React.createElement('div',{style:{maxWidth:1200,margin:'0 auto',padding:'72px 24px'}},
+      eyebrow('Difficultés rencontrées'),
+      React.createElement('h2',{style:{fontSize:34,fontWeight:800,letterSpacing:'-.6px',marginBottom:10}},'Ce qui n’a pas marché du premier coup'),
+      React.createElement('p',{style:{fontSize:15.5,color:'#5A6B82',maxWidth:680,marginBottom:36,lineHeight:1.6}},"Construire un drone médical sur six mois, avec un budget de 2000 DH, dans un marché local où les composants spécialisés sont rares, n'a rien d'évident. Voici les cinq obstacles majeurs qui nous ont obligés à improviser."),
+      React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:18,marginBottom:24}},
+        diffs.slice(0,4).map((d,i)=>React.createElement('div',{key:i,style:{background:'#fff',border:'1px solid #EAF0F7',borderRadius:18,padding:'24px 22px',display:'flex',gap:16}},
+          React.createElement('span',{style:{flexShrink:0,width:46,height:46,borderRadius:12,background:d.col+'18',display:'flex',alignItems:'center',justifyContent:'center'}},Icon(d.ic,22,d.col)),
+          React.createElement('div',null,
+            React.createElement('div',{style:{fontSize:16,fontWeight:800,marginBottom:8}},d.t),
+            React.createElement('p',{style:{fontSize:13.5,color:'#4A5C73',lineHeight:1.6}},d.d))))),
+      // Dernière difficulté en pleine largeur (pour le contenu plus émotionnel)
+      React.createElement('div',{style:{background:'#15233B',color:'#fff',borderRadius:18,padding:'26px 26px',display:'flex',gap:18,alignItems:'flex-start'}},
+        React.createElement('span',{style:{flexShrink:0,width:52,height:52,borderRadius:13,background:'rgba(229,72,77,.22)',display:'flex',alignItems:'center',justifyContent:'center'}},Icon(diffs[4].ic,24,'#FF9B9F')),
+        React.createElement('div',null,
+          React.createElement('div',{style:{fontSize:12.5,fontWeight:800,color:'#FF9B9F',textTransform:'uppercase',letterSpacing:.6,marginBottom:6}},'La leçon la plus marquante'),
+          React.createElement('div',{style:{fontSize:17,fontWeight:800,marginBottom:8}},diffs[4].t),
+          React.createElement('p',{style:{fontSize:14,color:'#C7D6EB',lineHeight:1.65}},diffs[4].d))))
   );
 }
 
@@ -1467,6 +1509,7 @@ function AboutScreen(props){
     React.createElement(AboutNeed,{c}),
     React.createElement(AboutSolution,{c}),
     React.createElement(AboutJourney,{c}),
+    React.createElement(AboutDifficulties,{c}),
     React.createElement(AboutFuture,{c}),
     React.createElement(AboutCTA,{c}));
 }
@@ -1500,7 +1543,7 @@ class OrderPill extends React.Component{
 // ============== ABOUT HEADER (discover mode top bar) ==============
 function AboutHeader(props){
   const c=props.c;
-  const links=[['about-team',"L'Équipe"],['about-need','Le Besoin'],['about-solution','La Solution'],['about-journey','Notre Parcours'],['about-future','Perspectives']];
+  const links=[['about-team',"L'Équipe"],['about-need','Le Besoin'],['about-solution','La Solution'],['about-journey','Notre Parcours'],['about-difficulties','Difficultés'],['about-future','Perspectives']];
   const link=(id,label)=>React.createElement('span',{key:id,onClick:()=>aboutScrollTo(id),style:{fontSize:14.5,fontWeight:700,color:'#DCE7F4',cursor:'pointer',whiteSpace:'nowrap'}},label);
   return React.createElement('div',{style:{position:'sticky',top:0,zIndex:200,padding:'14px 18px',pointerEvents:'none'}},
     React.createElement('div',{style:{maxWidth:1200,margin:'0 auto',background:'rgba(18,30,50,.55)',backdropFilter:'blur(14px)',WebkitBackdropFilter:'blur(14px)',border:'1px solid rgba(255,255,255,.10)',borderRadius:44,padding:'9px 9px 9px 18px',display:'flex',alignItems:'center',gap:20,boxShadow:'0 14px 38px rgba(10,20,40,.3)',pointerEvents:'auto'}},
