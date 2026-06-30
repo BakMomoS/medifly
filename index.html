@@ -202,20 +202,24 @@ class Component extends DCLogic {
     const L = Object.assign({}, this.state.live||{});
     const num = re => { const m=line.match(re); return m? parseFloat(m[1]) : null; };
     let v;
-    // Format firmware MediFly : [DBG] R:.. P:.. | pidR:.. pidP:.. pidY:.. | THR:.. |
-    //                          Alt:..m T:..°C | GPS:FIX/--- Sats:.. Lat:.. Lng:.. | Armed:OUI/NON
-    if((v=num(/\bR:\s*(-?\d+(?:\.\d+)?)/))   !=null) L.roll=v;   // MPU6050 roll
-    if((v=num(/\bP:\s*(-?\d+(?:\.\d+)?)/))   !=null) L.pitch=v;  // MPU6050 pitch
-    if((v=num(/THR:\s*(\d+)/))                !=null) L.thr=v;    // throttle µs
-    if((v=num(/Alt:\s*(-?\d+(?:\.\d+)?)/i))  !=null) L.alt=v;    // BMP280 altitude relative
-    if((v=num(/\bT:\s*(-?\d+(?:\.\d+)?)/))   !=null) L.temp=v;   // BMP280 température
-    if((v=num(/Sats:\s*(\d+)/i))             !=null) L.sats=v;   // GPS satellites
-    if((v=num(/Lat:\s*(-?\d+(?:\.\d+)?)/i))  !=null) L.lat=v;    // GPS latitude
-    if((v=num(/Lng:\s*(-?\d+(?:\.\d+)?)/i))  !=null) L.lon=v;    // GPS longitude
-    if(/GPS:\s*FIX/i.test(line))      L.gpsFix=true;
+    // Formats firmware tolérés (MediFly ESP32) :
+    //   "DESARME | R: 0.2° P: 0.2° | ALT:0.14m T:24.4°C | GPS:FIX SAT:7 LAT:33.573100 LNG:-7.589800"
+    //   (ARME / DESARME pour l'état armement ; SAT: ou Sats: ; LAT: ou Lat: ou Latitude:)
+    if((v=num(/\bR:\s*(-?\d+(?:\.\d+)?)/))    !=null) L.roll=v;   // MPU6050 roll
+    if((v=num(/\bP:\s*(-?\d+(?:\.\d+)?)/))    !=null) L.pitch=v;  // MPU6050 pitch
+    if((v=num(/THR:\s*(\d+)/i))               !=null) L.thr=v;    // throttle µs
+    if((v=num(/\bALT:\s*(-?\d+(?:\.\d+)?)/i)) !=null) L.alt=v;    // BMP280 altitude (m)
+    if((v=num(/\bT:\s*(-?\d+(?:\.\d+)?)/))    !=null) L.temp=v;   // BMP280 temperature (°C)
+    if((v=num(/\bSATS?:\s*(\d+)/i))           !=null) L.sats=v;   // SAT:7 ou Sats:7
+    if((v=num(/\b(?:LAT|LATITUDE):\s*(-?\d+(?:\.\d+)?)/i))  !=null) L.lat=v;
+    if((v=num(/\b(?:LNG|LON|LONG|LONGITUDE):\s*(-?\d+(?:\.\d+)?)/i)) !=null) L.lon=v;
+    if((v=num(/\b(?:SPD|SPEED|VIT):\s*(-?\d+(?:\.\d+)?)/i)) !=null) L.speed=v;  // km/h optionnel
+    if((v=num(/\b(?:HDG|HEADING|CAP):\s*(-?\d+(?:\.\d+)?)/i))!=null) L.heading=v; // cap optionnel
+    if(/GPS:\s*FIX/i.test(line))       L.gpsFix=true;
     else if(/GPS:\s*-{2,}/.test(line)) L.gpsFix=false;
-    if(/Armed:\s*OUI/i.test(line))     L.armed=true;
-    else if(/Armed:\s*NON/i.test(line)) L.armed=false;
+    if(/\bARME(?:D)?\b/i.test(line) && !/DESARME/i.test(line)) L.armed=true;
+    else if(/DESARME/i.test(line) || /Armed:\s*NON/i.test(line)) L.armed=false;
+    else if(/Armed:\s*OUI/i.test(line)) L.armed=true;
     // événements treuil optionnels : [WINCH] Descente / Remontée / Arrêt
     if(/\[WINCH\]/i.test(line)){
       if(/Descente/i.test(line)) L.boxMotion='descending';
