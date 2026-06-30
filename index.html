@@ -247,54 +247,69 @@ class Component extends DCLogic {
     {id:'MF-0476', struct:'CHU Ibn Rochd', city:'Casablanca', item:'Adrénaline ×4', prio:'Urgence vitale', status:'Livrée', c:'#1FA97A'},
   ]; }
 
-  // flight telemetry from progress (simulée) — fusionnée avec les données live USB du firmware si connecté
+  // Télémétrie de vol — deux modes ÉTANCHES :
+  //  • Drone connecté (serialOn)  → uniquement les données envoyées par le firmware
+  //  • Mode démo (non connecté)  → simulation pédagogique (vol fictif Casa)
   telemetry(){
-    const p=this.state.flyProgress;
     const d=new Date(this.state.now||Date.now());
     const pad=n=>(n<10?'0':'')+n;
+    const dateStr=pad(d.getDate())+'/'+pad(d.getMonth()+1)+'/'+d.getFullYear();
+    const timeStr=pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+
+    // ====== Mode DRONE LIVE — aucune simulation ======
+    if(this.state.serialOn){
+      const L=this.state.live||{};
+      const v=(x,fmt)=>(x==null||(typeof x==='number'&&!isFinite(x)))?'--':(fmt?fmt(x):x);
+      return {
+        progress: null,
+        eta:    '--',
+        dist:   '--',
+        alt:    v(L.alt,   n=>Math.round(n)),
+        speed:  v(L.speed, n=>Math.round(n)),
+        bat:    v(L.bat),
+        temp:   v(L.temp,  n=>n.toFixed(1)),
+        lat:    v(L.lat,   n=>n.toFixed(5)),
+        lon:    v(L.lon,   n=>n.toFixed(5)),
+        sats:   v(L.sats),
+        heading: (typeof L.heading==='number')?L.heading:0,
+        roll:   v(L.roll,  n=>n.toFixed(1)),
+        pitch:  v(L.pitch, n=>n.toFixed(1)),
+        gpsFix: !!L.gpsFix,
+        armed:  !!L.armed,
+        time:   timeStr,
+        date:   dateStr,
+        boxMotion: L.boxMotion||'idle',
+        source: 'Drone (USB · live)',
+      };
+    }
+
+    // ====== Mode SIMULATION — drone non connecté ======
+    const p=this.state.flyProgress;
     const alt = p>=1?0:Math.round(55+Math.sin(p*Math.PI)*75);
-    // mouvement vertical de la box (treuil) : montée au chargement, descente à la livraison
     let boxMotion='idle';
     if(p>0.01 && p<0.12) boxMotion='ascending';
     else if(p>=0.88 && p<1) boxMotion='descending';
-    const out = {
+    return {
       progress:p,
       eta: Math.max(0, Math.round((1-p)*9)),
       dist: ((1-p)*8.4).toFixed(1),
-      alt: alt,                                  // BMP280 — altitude relative (m)
-      speed: p>=1?0:64,                          // GPS — vitesse sol (km/h)
+      alt: alt,
+      speed: p>=1?0:64,
       bat: Math.round(92-p*24),
-      temp: (24.5 - alt*0.035).toFixed(1),       // BMP280 — température extérieure (°C)
-      lat: (33.5731+p*0.02).toFixed(5),          // GPS NEO-6M
+      temp: (24.5 - alt*0.035).toFixed(1),
+      lat: (33.5731+p*0.02).toFixed(5),
       lon: (-7.5898+p*0.015).toFixed(5),
-      sats: p>0.3?11:8,                          // GPS — satellites
-      heading: Math.round((74+Math.sin(p*6)*12+360)%360), // GPS — cap
-      roll: (Math.sin((this.state.now||0)/700)*2.4).toFixed(1),   // MPU6050
+      sats: p>0.3?11:8,
+      heading: Math.round((74+Math.sin(p*6)*12+360)%360),
+      roll: (Math.sin((this.state.now||0)/700)*2.4).toFixed(1),
       pitch: (Math.cos((this.state.now||0)/900)*2.0).toFixed(1),
       gpsFix: true,
       armed: p>0 && p<1,
-      time: pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds()),
-      date: pad(d.getDate())+'/'+pad(d.getMonth()+1)+'/'+d.getFullYear(),
+      time: timeStr,
+      date: dateStr,
       boxMotion: boxMotion,
       source: 'Simulation',
     };
-    // Fusion avec la télémétrie réelle du firmware (Web Serial)
-    const L=this.state.live;
-    if(this.state.serialOn && L){
-      if(L.alt!=null)   out.alt=Math.round(L.alt);
-      if(L.temp!=null)  out.temp=L.temp.toFixed(1);
-      if(L.sats!=null)  out.sats=L.sats;
-      if(L.roll!=null)  out.roll=L.roll.toFixed(1);
-      if(L.pitch!=null) out.pitch=L.pitch.toFixed(1);
-      if(L.gpsFix!=null)out.gpsFix=L.gpsFix;
-      if(L.armed!=null) out.armed=L.armed;
-      if(L.speed!=null) out.speed=Math.round(L.speed);
-      if(L.lat!=null)   out.lat=L.lat.toFixed(5);
-      if(L.lon!=null)   out.lon=L.lon.toFixed(5);
-      if(L.boxMotion)   out.boxMotion=L.boxMotion;
-      out.source='Drone (USB · live)';
-    }
-    return out;
   }
 
   renderVals(){ return { app: React.createElement(MFApp, {c:this}) }; }
@@ -820,11 +835,14 @@ function RealMap(props){
   const A=[33.5731,-7.5898];
   const B=[33.5931,-7.5748];
   function curPos(){
-    let lat=parseFloat(t.lat), lon=parseFloat(t.lon), prog=t.progress||0;
-    if(!t.gpsFix || !isFinite(lat) || Math.abs(lat)<1 || Math.abs(lon)<1){
-      lat=A[0]+(B[0]-A[0])*prog; lon=A[1]+(B[1]-A[1])*prog;
+    let lat=parseFloat(t.lat), lon=parseFloat(t.lon);
+    if(t.gpsFix && isFinite(lat) && isFinite(lon) && Math.abs(lat)>1 && Math.abs(lon)>1) return [lat,lon];
+    // Pas de fix GPS : en simulation on interpole A→B, en mode live on reste au dépôt
+    if(t.progress!=null){
+      const prog=t.progress||0;
+      return [A[0]+(B[0]-A[0])*prog, A[1]+(B[1]-A[1])*prog];
     }
-    return [lat,lon];
+    return A;
   }
   function update(){
     const L=window.L, R=ref.current; if(!L||!R.map) return;
@@ -841,8 +859,12 @@ function RealMap(props){
       const L=window.L;
       if(!L || !elRef.current){ setTimeout(init,150); return; }
       if(ref.current.map) return;
-      const map=L.map(elRef.current,{zoomControl:false,attributionControl:false,scrollWheelZoom:false,doubleClickZoom:false}).setView([(A[0]+B[0])/2,(A[1]+B[1])/2],14);
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',{maxZoom:20,subdomains:'abcd'}).addTo(map);
+      const map=L.map(elRef.current,{zoomControl:false,attributionControl:false,scrollWheelZoom:false,doubleClickZoom:false}).setView([(A[0]+B[0])/2,(A[1]+B[1])/2],16);
+      // Imagerie satellite haute résolution (Esri World Imagery) — pas de clé API
+      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'Tiles © Esri'}).addTo(map);
+      // Overlay labels (rues, lieux) pour garder la lisibilité
+      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,opacity:.9,attribution:''}).addTo(map);
+      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,opacity:.85,attribution:''}).addTo(map);
       ref.current.done=L.polyline([A],{color:'#1E7FE5',weight:4,opacity:.95}).addTo(map);
       ref.current.todo=L.polyline([A,B],{color:'#7FB1E8',weight:3,opacity:.85,dashArray:'3 9'}).addTo(map);
       L.marker(A,{icon:L.divIcon({className:'',iconSize:[18,18],iconAnchor:[9,9],html:'<div style="width:16px;height:16px;border-radius:50%;background:#1565D8;border:3px solid #fff;box-shadow:0 2px 6px rgba(21,35,59,.4)"></div>'})}).addTo(map).bindTooltip('Dépôt CRTS',{permanent:true,direction:'left',className:'mf-tip',offset:[-8,0]});
